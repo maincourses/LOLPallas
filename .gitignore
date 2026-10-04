@@ -1,0 +1,20 @@
+# Private text and user-side editor backups.
+/scheme20.json
+/backups/
+
+# Proprietary version-pinned files kept locally, never committed.
+/engine/assets/*.dll
+
+# Generated packages, reports and test fixtures.
+/build/
+/dist/
+__pycache__/
+*.py[cod]
+*.tmp
+*.log
+
+# Editor/OS local files.
+.vs/
+.idea/
+Thumbs.db
+.DS_Store
