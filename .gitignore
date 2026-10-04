@@ -1,5 +1,6 @@
 # Private text and user-side editor backups.
 /scheme20.json
+/messages.json
 /backups/
 
 # Proprietary version-pinned files kept locally, never committed.

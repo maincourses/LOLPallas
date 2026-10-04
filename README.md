@@ -1,10 +1,39 @@
 # LOLPallas
 
-WeGame 本地二十条快捷喊话及中文文案编辑器。当前是 **zly 这台电脑的实验版**，不是通用安装器。
+WeGame 本地快捷喊话及中文编辑器。新版候选支持 **64 KiB 文案库、1～512 条消息、每条独立组合键**。当前是 **zly 这台电脑的版本锁定实验版**，不是通用安装器。
 
-## 使用
+## 新版：64 KiB／独立快捷键
 
-双击 `Open-Editor.cmd`。两个标签页分别编辑前十条、后十条，界面显示快捷键、长度和整包容量。
+本机 v2 已安装并通过文件回读校验（2026-10-04）。原二十条已原样迁移，运行库为 2296 字节；真实游戏发送待用户在训练模式确认。
+
+双击 `Open-Editor.cmd`。首次打开会把当前 v1 本地库的二十条文案和原快捷键导入 `messages.json`，不会覆盖已有源文件，也不会自动应用到运行目录。
+
+- 在表格修改“消息内容”和“快捷键”，可以“新增消息”“删除选中”“录制快捷键”。
+- 支持如 `Ctrl+Alt+Q`、`Ctrl+Shift+F2`、`~+1`、`~+F1`；Ctrl/Alt/Shift/~ 可以组合，至少一个前缀。不支持裸键、Win、Enter、Tab、Esc；系统关闭等危险组合拒绝保存。
+- “保存文案”仅保存源文件，WeGame 可以继续运行；旧源文件自动备份到项目 `backups/`。
+- 首次安装先结束游戏并退出客户端、从托盘退出 WeGame，再运行 `Enable-Pallas-Hotkeys.cmd`，确认实验版安装。
+- 后续修改用“保存并应用”，同样要求完全退出游戏、客户端及 WeGame，然后手动启动 WeGame。启动后不要在 WeGame 原生助手里编辑文案。
+- 按住所设修饰键、按下主键发送一次；只松开主键就能再发。按住主键不会连续刷屏，额外 Ctrl/Alt/Shift/~ 修饰键必须与设置一致。
+
+快捷键仍通过 WeGame 原发送链路，不模拟逐字输入。新版接管原键位处理，原生十条面板不是此版本的编辑／发送入口，不展示自定义键位；使用本地编辑器。游戏本身仍会收到这些按键，不负责屏蔽或消除游戏绑定冲突。
+
+**容量不是单条长度**：64 KiB 即 65536 字节，包含二进制头、键位记录和 UTF-8 文案。每条记录额外 9 字节，整库额外 16 字节；消息数量也有 512 条保护上限，不能同时保证 512 条都写满。中文通常每字 3 字节。单条仍限制 50 个 UTF-16 单位，超出拒绝保存、不截断；这不是测得的游戏上限，也没有扩大游戏服务器的单条限制。
+
+`messages.json` 是可编辑源文件；应用生成 `%LOCALAPPDATA%\PallasCustomShout\hotkeys-v2.bin` 及短响应 `local-response.json`。固定 2046 字节传输链路未扩大，只传递本地文件的长度／一致性校验标记。原生代码只加载经过完整长度、版本、校验、UTF-8、单条保护、条数及键位去重检查的库；异常时禁用发送。
+
+`Check-Pallas-Hotkeys.cmd` 只读检查；`Restore-Pallas-Hotkeys.cmd` 恢复安装前已由用户确认可用的 **8 KiB v1 二十条 DLL／库／响应**，保留所有 v2 文案和备份。运行备份在 `%LOCALAPPDATA%\PallasCustomShout\HotkeysV2Experiment`，原 v1 备份不动。不要混用旧二十条安装／恢复工具。
+
+离线测试已覆盖 64 KiB 边界、512 条映射、独立组合、按键去重、坏文件禁用、跨语言字节一致性、保存／应用／安装／回退及旧版回归。v1 已由用户报告真实游戏发送正常；新版的真实加载和发送仍需安装后在训练模式人工验证，不能仅凭离线测试宣布游戏兼容。
+
+此候选加入两个标准 USER32 API 来读取键盘状态和前台窗口，并将可执行代码与可写缓存分开，不创建 RWX 节。修改组件的 Authenticode 摘要仍失效。如果更新、签名、完整性或反作弊检查拒绝加载，应停止并恢复，不能绕过检查。没有自动发送游戏消息，也没有对游戏进程进行运行时注入或读取。
+
+新增主要文件：`Edit-Hotkeys-GUI.ps1`（界面）、`lib/HotkeyTools.ps1`（校验和保存）、`Manage-Pallas-Hotkeys.ps1`（安装应用回退）、`messages.example.json`（模板）、`tools/native/hotkeys2.c`（本地库与键位处理）、`tools/native/PallasHotkeys.py`（离线构建）。`messages.json` 和生成组件不进入 Git。旧版代码保留用于回退和对照。
+
+完整说明与验证边界见 [v2 设计说明](docs/hotkeys-v2.md)。这仍不是可直接发送给任意其他电脑的通用安装包。
+
+## 旧版二十条（2046 字节）使用
+
+旧版编辑器入口是 `Open-Twenty-Editor.cmd`，原 `Open-Editor.cmd` 现在进入 v2。下面说明仅适用于旧版二十条／2046 字节版本，不适用于 v1 文案库或 v2 独立键位版。
 
 - **保存到本地**：写入 `scheme20.json`；WeGame 可以保持运行。不同文案保存前在 `backups/` 备份旧 JSON。
 - **保存并应用**：先保存，再应用。必须先关闭游戏及客户端，并从系统托盘退出 WeGame；未退出时仅保存、拒绝应用。
@@ -15,7 +44,7 @@ Git 检出不包含个人文案。首次正常打开编辑器时，会从 `schem
 
 也可以运行 `Validate-Messages.cmd`、`Enable-Pallas-Twenty.cmd`、`Check-Pallas-Twenty.cmd`。成功应用后手动启动 WeGame，开启“一键喊话”，面板键与文案配置保持一致。
 
-按住 `~`，松开 `1～9、0` 分别发送第 1～10 条；松开 `F1～F10` 分别发送第 11～20 条。不必每次松开 `~`。面板键可在编辑器改为 Ctrl。原生面板仍只显示前十条，F 键可能与游戏绑定冲突。
+按住 `~`，按下 `1～9、0` 分别发送第 1～10 条；按下 `F1～F10` 分别发送第 11～20 条。松开主键后可以再次发送，不必每次松开 `~`。面板键可在编辑器改为 Ctrl。原生面板仍只显示前十条，F 键可能与游戏绑定冲突。
 
 ## 原理和边界
 
@@ -33,6 +62,8 @@ Git 检出不包含个人文案。首次正常打开编辑器时，会从 `schem
 
 实验 DLL 的腾讯 Authenticode 摘要失效，可能被拒绝加载、更新覆盖或出现异常。异常时停止使用并恢复，不绕过签名、完整性或反作弊检查。不上传文案、不读取账号票据，也不自动发送游戏消息；WeGame 登录和其他功能仍可能联网。
 
+前一阶段 [v1 本地文案库实验](experiments/local-library/README.md) 已安装，并由用户报告发送正常：8 KiB、二十条。新版 v2 在此基础上加入独立键位和增删消息。
+
 ## 恢复
 
 `Restore-Pallas-Twenty.cmd` 恢复安装前的 **十条 DLL 和十条运行响应**，不是仅撤销一次编辑；不恢复 `pallas.exe`。恢复前也要完全退出游戏及 WeGame，后来编辑过的响应会另存备份。
@@ -43,7 +74,13 @@ Git 检出不包含个人文案。首次正常打开编辑器时，会从 `schem
 
 ```text
 LOLPallas/
-  Open-Editor.cmd             日常编辑入口
+  Open-Editor.cmd             新版动态消息及独立键位编辑入口
+  *-Pallas-Hotkeys.cmd         新版安装、检查、恢复
+  Edit-Hotkeys-GUI.ps1        新版编辑器
+  Manage-Pallas-Hotkeys.ps1   新版安装及文案管理
+  messages.json              新版个人文案和键位，Git 忽略
+  messages.example.json      新版模板
+  Open-Twenty-Editor.cmd     旧版二十条编辑入口
   *-Pallas-Twenty.cmd          启用、检查和恢复入口
   Validate-Messages.cmd       离线校验入口
   Edit-Twenty-GUI.ps1         编辑器主程序
@@ -68,12 +105,12 @@ DLL 保留在本机 `engine/assets/`，不进入 Git；Git 克隆不会自带腾
 
 ```powershell
 powershell -NoProfile -Sta -ExecutionPolicy Bypass -File .\tools\Test.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Build-Package.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Build-Hotkeys-Experiment.ps1
 ```
 
-GUI 日常使用无需 Python。测试使用 Windows PowerShell 5.1 和系统 WinForms，测试文件只写入 `build/test-work/`，不改运行响应、不发送消息。DLL 开发工具需要 Python 3，但不在应用启动时运行。
+GUI 日常使用无需 Python。源文件、界面及事务测试使用 Windows PowerShell 5.1 和 WinForms，生成文件只写入 `build/` 或具名临时目录，不改运行响应、不发送消息。原生构建及隔离指令测试使用本机 Python 和 Clang；不会加载腾讯 DLL，启动应用时也不运行 Python。
 
-打包包含应用和原生构建源码，默认使用模板文案，不包含你的个人文案、备份、开发测试、旧实验或 Git 历史；输出到 `dist/`，逐项回读 SHA-256。生成包仍是本机版本，不会因为重新打包而变成通用版。
+`tools/Build-Package.ps1` 仍明确只打包旧二十条版本，使用旧编辑入口及独立旧版说明，**不是 v2 分发包**。v2 暂不提供通用安装包；不能把旧包当成 64 KiB 自定义键位版。
 
 CMD 使用 ASCII / CRLF；PowerShell 源码保持 ASCII，中文界面文本放在 UTF-8 JSON 中，避免 Windows PowerShell 5.1 编码问题。
 

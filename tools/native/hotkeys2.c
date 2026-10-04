@@ -1,0 +1,182 @@
+/* Offline candidate. No injection, game discovery, network or input simulation.
+ * Loads only a bounded, versioned local file. Reuses the original sender.
+ * Data and code are linked into separate RW and RX sections (never RWX).
+ */
+typedef unsigned int DWORD;
+typedef unsigned short WORD;
+typedef unsigned long long SIZE_T;
+typedef void *HANDLE;
+#define API __declspec(dllimport)
+#define CAPACITY 65536u
+#define MAX_ENTRIES 512u
+API HANDLE __stdcall CreateFileW(const WORD *, DWORD, DWORD, void *, DWORD, DWORD, HANDLE);
+API int __stdcall ReadFile(HANDLE, void *, DWORD, DWORD *, void *);
+API int __stdcall CloseHandle(HANDLE);
+API short __stdcall GetAsyncKeyState(int);
+API HANDLE __stdcall GetForegroundWindow(void);
+extern void *copy_string(void *, const char *);
+extern void original_send(const char *);
+
+static const WORD library_path[] = L"C:\\Users\\zly\\AppData\\Local\\PallasCustomShout\\hotkeys-v2.bin";
+static const char prefix[] = "{\"_lps_keys_v2\":\"";
+static const char empty_scheme[] =
+    "{\"0\":\"\",\"1\":\"\",\"2\":\"\",\"3\":\"\",\"4\":\"\","
+    "\"5\":\"\",\"6\":\"\",\"7\":\"\",\"8\":\"\",\"9\":\"\","
+    "\"10\":\"\",\"11\":\"\",\"12\":\"\",\"13\":\"\",\"14\":\"\","
+    "\"15\":\"\",\"16\":\"\",\"17\":\"\",\"18\":\"\",\"19\":\"\","
+    "\"title\":\"LOCAL HOTKEYS: USE LOCAL EDITOR\",\"key\":1}";
+static const char failed_scheme[] =
+    "{\"0\":\"\",\"1\":\"\",\"2\":\"\",\"3\":\"\",\"4\":\"\","
+    "\"5\":\"\",\"6\":\"\",\"7\":\"\",\"8\":\"\",\"9\":\"\","
+    "\"10\":\"\",\"11\":\"\",\"12\":\"\",\"13\":\"\",\"14\":\"\","
+    "\"15\":\"\",\"16\":\"\",\"17\":\"\",\"18\":\"\",\"19\":\"\","
+    "\"title\":\"LOCAL HOTKEYS LOAD FAILED\",\"key\":1}";
+static volatile DWORD gate, active, generation;
+static DWORD loaded_generation;
+static DWORD entry_count;
+static struct Entry { DWORD vk, mods, length, offset; } entries[MAX_ENTRIES];
+static unsigned char blob[CAPACITY + 1], pressed[256];
+static HANDLE foreground;
+
+static int acquire(void) { return !__atomic_exchange_n(&gate, 1, __ATOMIC_ACQUIRE); }
+static void release(void) { __atomic_store_n(&gate, 0, __ATOMIC_RELEASE); }
+static DWORD u32(const unsigned char *p) {
+    return (DWORD)p[0] | ((DWORD)p[1] << 8) | ((DWORD)p[2] << 16) | ((DWORD)p[3] << 24);
+}
+static int hex8(const char *p, DWORD *out) {
+    DWORD value = 0;
+    for (DWORD i = 0; i < 8; ++i) {
+        unsigned char c = (unsigned char)p[i];
+        if (c >= '0' && c <= '9') value = (value << 4) | (c - '0');
+        else if (c >= 'A' && c <= 'F') value = (value << 4) | (c - 'A' + 10);
+        else return 0;
+    }
+    *out = value; return 1;
+}
+static int valid_key(DWORD vk, DWORD mods) {
+    if (!mods || mods > 15) return 0;
+    if (!((vk >= 0x30 && vk <= 0x39) || (vk >= 0x41 && vk <= 0x5A) ||
+          (vk >= 0x60 && vk <= 0x69) || (vk >= 0x70 && vk <= 0x87) ||
+          (vk >= 0x21 && vk <= 0x28) || vk == 0x2D || vk == 0x2E)) return 0;
+    /* Never accept the Windows close/task-manager/security shortcuts. */
+    if ((mods & 2) && vk == 0x73) return 0; /* Alt+F4 */
+    if ((mods & 3) == 3 && vk == 0x2E) return 0; /* Ctrl+Alt+Delete */
+    return 1;
+}
+static int valid_text(const unsigned char *p, DWORD n) {
+    DWORD at = 0, units = 0, visible = 0;
+    if (!n || n > 200) return 0;
+    while (at < n) {
+        DWORD cp = p[at++], extra = 0, minimum = 0;
+        if (cp >= 0xC2 && cp <= 0xDF) { cp &= 31; extra = 1; minimum = 0x80; }
+        else if (cp >= 0xE0 && cp <= 0xEF) { cp &= 15; extra = 2; minimum = 0x800; }
+        else if (cp >= 0xF0 && cp <= 0xF4) { cp &= 7; extra = 3; minimum = 0x10000; }
+        else if (cp >= 0x80) return 0;
+        if (extra > n - at) return 0;
+        for (DWORD j = 0; j < extra; ++j) {
+            DWORD c = p[at++];
+            if ((c & 0xC0) != 0x80) return 0;
+            cp = (cp << 6) | (c & 63);
+        }
+        if (cp < minimum || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF) ||
+            cp < 32 || cp == 127) return 0;
+        units += cp > 0xFFFF ? 2 : 1;
+        if (units > 50) return 0;
+        if (!(cp == 32 || cp == 0x85 || cp == 0xA0 || cp == 0x1680 ||
+              (cp >= 0x2000 && cp <= 0x200A) || cp == 0x2028 || cp == 0x2029 ||
+              cp == 0x202F || cp == 0x205F || cp == 0x3000)) visible = 1;
+    }
+    return visible != 0;
+}
+static int validate(DWORD length) {
+    static const char magic[] = "LPSKEY2";
+    for (DWORD i = 0; i < 8; ++i) if (blob[i] != (unsigned char)magic[i]) return 0;
+    DWORD count = u32(blob + 12), at = 16;
+    if (u32(blob + 8) != length || !count || count > MAX_ENTRIES) return 0;
+    DWORD seen[128];
+    for (DWORD i = 0; i < 128; ++i) seen[i] = 0;
+    for (DWORD i = 0; i < count; ++i) {
+        if (at > length || length - at < 9) return 0;
+        DWORD vk = blob[at] | ((DWORD)blob[at + 1] << 8);
+        DWORD mods = blob[at + 2] | ((DWORD)blob[at + 3] << 8);
+        DWORD size = u32(blob + at + 4); at += 8;
+        if (!valid_key(vk, mods) || size >= length - at || blob[at + size] ||
+            !valid_text(blob + at, size)) return 0;
+        DWORD bit = mods * 256 + vk, mask = 1u << (bit & 31);
+        if (seen[bit >> 5] & mask) return 0;
+        seen[bit >> 5] |= mask;
+        entries[i].vk = vk; entries[i].mods = mods;
+        entries[i].length = size; entries[i].offset = at;
+        at += size + 1;
+    }
+    if (at != length) return 0;
+    entry_count = count; return 1;
+}
+void *ReadLocalScheme(void *destination, const char *source) {
+    /* Invalidate before attempting the gate: contention fails closed. */
+    DWORD ticket = __atomic_add_fetch(&generation, 1, __ATOMIC_ACQ_REL);
+    __atomic_store_n(&active, 0, __ATOMIC_RELEASE);
+    if (!acquire()) return copy_string(destination, failed_scheme);
+    int ok = 0;
+    DWORD length = 0, expected = 0, count = 0;
+    entry_count = 0; foreground = 0;
+    for (DWORD i = 0; i < 256; ++i) pressed[i] = 0;
+    for (DWORD i = 0; i < sizeof(prefix) - 1; ++i) {
+        if (!source || source[i] != prefix[i]) goto done;
+    }
+    const char *token = source + sizeof(prefix) - 1;
+    if (!hex8(token, &length) || token[8] != ':' || !hex8(token + 9, &expected) ||
+        token[17] != '"' || token[18] != ',' || length < 26 || length > CAPACITY) goto done;
+    HANDLE file = CreateFileW(library_path, 0x80000000u, 1, 0, 3, 0x00200080u, 0);
+    if (!file || file == (HANDLE)(SIZE_T)-1) goto done;
+    ok = ReadFile(file, blob, length + 1, &count, 0);
+    CloseHandle(file);
+    if (!ok || count != length) { ok = 0; goto done; }
+    DWORD hash = 2166136261u;
+    for (DWORD i = 0; i < length; ++i) hash = (hash ^ blob[i]) * 16777619u;
+    ok = hash == expected && validate(length);
+done:
+    loaded_generation = ticket;
+    __atomic_store_n(&active, (DWORD)ok, __ATOMIC_RELEASE);
+    release();
+    return copy_string(destination, ok ? empty_scheme : failed_scheme);
+}
+
+void CustomKeyboard(void *object, DWORD message, SIZE_T key, SIZE_T unused) {
+    (void)object; (void)unused;
+    if (key >= 256 || (message != 0x100 && message != 0x101 &&
+        message != 0x104 && message != 0x105) || !acquire()) return;
+    if (!__atomic_load_n(&active, __ATOMIC_ACQUIRE) ||
+        loaded_generation != __atomic_load_n(&generation, __ATOMIC_ACQUIRE)) { release(); return; }
+    HANDLE current = GetForegroundWindow();
+    if (!current) { release(); return; }
+    if (current != foreground) {
+        foreground = current;
+        for (DWORD i = 0; i < 256; ++i) pressed[i] = 0;
+    }
+    if (message == 0x101 || message == 0x105) { pressed[key] = 0; release(); return; }
+    if (pressed[key]) { release(); return; }
+    /* Latch even a nonmatching primary press: adding modifiers afterwards
+     * must not turn OS autorepeat into a newly pressed shortcut. */
+    pressed[key] = 1;
+    if (GetAsyncKeyState(0x5B) < 0 || GetAsyncKeyState(0x5C) < 0) { release(); return; }
+    DWORD mods = 0;
+    if (GetAsyncKeyState(0x11) < 0) mods |= 1;
+    if (GetAsyncKeyState(0x12) < 0) mods |= 2;
+    if (GetAsyncKeyState(0x10) < 0) mods |= 4;
+    if (GetAsyncKeyState(0xC0) < 0) mods |= 8;
+    char text[201];
+    DWORD length = 0;
+    for (DWORD i = 0; i < entry_count; ++i) {
+        if (entries[i].vk == key && entries[i].mods == mods) {
+            length = entries[i].length;
+            for (DWORD j = 0; j < length; ++j) text[j] = (char)blob[entries[i].offset + j];
+            text[length] = 0; break;
+        }
+    }
+    release();
+    /* Never hold the gate while calling an external/reentrant sender. */
+    if (length) original_send(text);
+}
+
+void SendNonempty(const char *text) { if (text && *text) original_send(text); }

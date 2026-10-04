@@ -22,7 +22,8 @@ function Get-ShoutFileHash([string]$Path) {
     finally { $algorithm.Dispose(); $stream.Dispose() }
 }
 
-function ConvertTo-TwentyResponse([string]$Text) {
+function ConvertTo-TwentyResponse([string]$Text,
+    [ValidateRange(1, 8192)][int]$MaximumSchemeBytes = 2046) {
     if ($Text.Length -gt 65536) { throw 'The source JSON is unexpectedly large.' }
     # This scheme is a flat object with string/number values. Collect every key
     # before ConvertFrom-Json, which otherwise silently accepts duplicate keys.
@@ -72,8 +73,8 @@ function ConvertTo-TwentyResponse([string]$Text) {
     $ordered['title'] = $scheme.title
     $ordered['key'] = $scheme.key
     $raw = $utf8.GetBytes(($ordered | ConvertTo-Json -Compress -Depth 4))
-    if ($raw.Length -gt 2046) {
-        throw ('The complete scheme uses ' + $raw.Length + ' UTF-8 bytes; maximum is 2046. Shorten some messages. Nothing was truncated.')
+    if ($raw.Length -gt $MaximumSchemeBytes) {
+        throw ('The complete scheme uses ' + $raw.Length + ' UTF-8 bytes; maximum is ' + $MaximumSchemeBytes + '. Shorten some messages. Nothing was truncated.')
     }
     $envelope = [ordered]@{ result = [ordered]@{ error_code = 0 }; shout_message = [Convert]::ToBase64String($raw) }
     $response = $utf8.GetBytes(($envelope | ConvertTo-Json -Compress -Depth 4))

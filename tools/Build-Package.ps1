@@ -1,4 +1,4 @@
-# Build a clean current-computer package; never copy personal messages/backups.
+# LEGACY twenty-message package only. Never copy personal messages/backups.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $root 'lib\ShoutTools.ps1')
@@ -15,6 +15,10 @@ $rootFiles = @('Open-Editor.cmd', 'Enable-Pallas-Twenty.cmd', 'Check-Pallas-Twen
     'Restore-Pallas-Twenty.cmd', 'Validate-Messages.cmd', 'Edit-Twenty-GUI.ps1',
     'Manage-Twenty-Release.ps1', 'scheme20.example.json', 'README.md')
 foreach ($name in $rootFiles) { Copy-Item -LiteralPath (Join-Path $root $name) -Destination $stage }
+# Root Open-Editor now starts v2; this packager intentionally remains the older
+# twenty-message release. Do not emit a dangling/misleading v2 entry point.
+Copy-Item -LiteralPath (Join-Path $root 'Open-Twenty-Editor.cmd') -Destination (Join-Path $stage 'Open-Editor.cmd') -Force
+Copy-Item -LiteralPath (Join-Path $root 'docs\legacy20-package.md') -Destination (Join-Path $stage 'README.md') -Force
 foreach ($directory in @('lib', 'engine')) { Copy-Item -LiteralPath (Join-Path $root $directory) -Destination $stage -Recurse }
 New-Item -ItemType Directory -Path (Join-Path $stage 'tools') | Out-Null
 Copy-Item -LiteralPath (Join-Path $root 'tools\native') -Destination (Join-Path $stage 'tools') -Recurse
@@ -27,7 +31,7 @@ foreach ($file in (Get-ChildItem -LiteralPath $stage -Recurse -File)) {
     $records += [ordered]@{ path = $relative; bytes = $file.Length; sha256 = $hash }
 }
 $manifest = [ordered]@{
-    project = 'LOLPallas'; created_utc = [DateTime]::UtcNow.ToString('o')
+    project = 'LOLPallas'; release = 'legacy-twenty-only'; created_utc = [DateTime]::UtcNow.ToString('o')
     scope = 'Current zly profile and pinned WeGame build only; NOT a universal installer'
     personal_messages_included = $false; default_scheme_utf8_bytes = $compiled.SchemeBytes.Length
     original_dll_sha256 = $originalHash; candidate_dll_sha256 = $candidateHash

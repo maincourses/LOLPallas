@@ -76,7 +76,7 @@ def read_scheme(path: Path) -> object:
                       object_pairs_hook=unique_object)
 
 
-def make_response(value: object) -> tuple[bytes, dict]:
+def make_response(value: object, max_json_bytes: int = MAX_JSON_BYTES) -> tuple[bytes, dict]:
     if not isinstance(value, dict) or set(value) != {
             "title", "key", *(str(i) for i in range(20))}:
         raise ValueError("Exactly title, key and message keys 0..19 are required.")
@@ -95,14 +95,16 @@ def make_response(value: object) -> tuple[bytes, dict]:
     ordered = {str(i): messages[i] for i in range(20)}
     ordered.update(title=title, key=value["key"])
     raw = compact(ordered)
-    if len(raw) > MAX_JSON_BYTES:
+    if not 1 <= max_json_bytes <= 8192:
+        raise ValueError("Unexpected offline scheme capacity.")
+    if len(raw) > max_json_bytes:
         raise ValueError(f"All twenty messages plus metadata use {len(raw)} UTF-8 "
-                         f"bytes; the unchanged transport permits {MAX_JSON_BYTES}.")
+                         f"bytes; this compiler profile permits {max_json_bytes}.")
     response = compact({"result": {"error_code": 0},
                         "shout_message": base64.b64encode(raw).decode("ascii")})
     return response, {
         "message_count": 20, "scheme_json_utf8_bytes": len(raw),
-        "native_whole_scheme_limit": MAX_JSON_BYTES,
+        "native_whole_scheme_limit": max_json_bytes,
         "experimental_per_message_utf16_guard": MAX_UTF16,
         "guard_is_not_a_measured_game_limit": True,
         "message_utf16_units": [utf16_length(x) for x in messages],
