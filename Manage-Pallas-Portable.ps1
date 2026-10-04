@@ -22,11 +22,12 @@ try {
     $resolvedRoot = Resolve-PortableRoot $WeGameRoot $data
     $context = New-PortableContext $resolvedRoot $data
     if ($Mode -eq 'Status') {
+        $record = $null
         $current = Get-ShoutFileHash $context.Dll
         Write-Host ('WeGame: ' + $context.Root)
         Write-Host ('Component SHA256: ' + $current)
         Write-Host ('Portable candidate installed: ' + ($current -eq $script:PortableTargetHash))
-        if ($current -eq $script:PortablePreviousHash) { Write-Host 'PREVIOUS TEST BUILD: use Install/Enable to apply the loader/input repair; texts will be retained.' }
+        if ($current -in (Get-PortablePreviousHashes)) { Write-Host 'PREVIOUS TEST BUILD: use Install/Enable for the original-import compatibility control; texts will be retained.' }
         Write-Host ('Local library: ' + $context.Library)
         if (Test-Path -LiteralPath $context.State -PathType Leaf) {
             $record = Read-PortableState $context
@@ -37,6 +38,13 @@ try {
             Write-Host ('Library matching: ' + ((Get-ShoutFileHash $context.Library) -eq $record.installed_library_sha256))
             Write-Host ('Applied source matching: ' + ((Get-ShoutFileHash $context.Source) -eq $record.installed_source_sha256))
         } else { Write-Host 'No portable installation record. Install.cmd is required before Apply.' }
+        try {
+            $runtime = Get-PortableRuntimeEvidence $context $record
+            Write-Host ('LATEST LOCAL GAME LOG: ' + ($runtime | ConvertTo-Json -Compress))
+            if ($runtime.Stage -eq 'assistant-not-running' -and $runtime.MatchesCurrentInstall) {
+                Write-Host 'RUNTIME FAILURE: component did not report running; keyboard/message logic is not yet proven to execute. Installation readback is NOT runtime success.'
+            }
+        } catch { Write-Host ('Runtime log unavailable (no changes): ' + $_.Exception.Message) }
         Write-Host 'TEST BUILD: offline/file checks do NOT prove game sending. Manual training-mode test required.'; exit 0
     }
     Assert-ShoutStopped; Assert-PortableLoader $context
@@ -64,6 +72,7 @@ try {
     if (-not $PatchDirectory) { $PatchDirectory = Join-Path $PSScriptRoot 'patches' }
     $name = 'original-to-portable.json'; if ($baseline -eq $script:PortableV2Hash) { $name = 'v2-to-portable.json' }
     if ($baseline -eq $script:PortablePreviousHash) { $name = 'portable-v3-to-fixed.json' }
+    if ($baseline -eq $script:PortableFixedPreviousHash) { $name = 'portable-fixed-to-compatible.json' }
     $before = [IO.File]::ReadAllBytes($context.Dll)
     $candidate = Expand-PortableDelta $before (Join-Path $PatchDirectory $name) $script:PortableDeltaHashes[$name]
     if ($PSCmdlet.ShouldProcess($context.Dll,'Install UNSIGNED EXPERIMENTAL local-hotkey component; backup first; never modify Pallas launcher')) {

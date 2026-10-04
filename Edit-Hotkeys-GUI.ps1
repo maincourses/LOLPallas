@@ -283,7 +283,7 @@ function Export-Messages {
 function Install-FromEditor {
     Save-Draft; $root = Get-SelectedWeGame
     $context = New-PortableContext $root (Get-PortableDataRoot)
-    $upgrading = (Get-ShoutFileHash $context.Dll) -eq $script:PortablePreviousHash
+    $upgrading = (Get-ShoutFileHash $context.Dll) -in (Get-PortablePreviousHashes)
     $stockReinstall = $false
     if ((Get-ShoutFileHash $context.Dll) -eq $script:PortableOriginalHash -and (Test-Path -LiteralPath $context.State)) {
         $stockReinstall = (Read-PortableState $context).status -eq 'original-components-restored'

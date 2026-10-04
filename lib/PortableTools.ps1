@@ -1,16 +1,109 @@
 # Windows PowerShell 5.1; importing defines functions only.
 . (Join-Path $PSScriptRoot 'HotkeyTools.ps1')
-$script:PortableTargetHash = '52776E6B2D105DF4CD0FF7EC8933E8170F7A404D1D6FD68288CA5C44AF0CC0AD'
+$script:PortableTargetHash = '3632DDE93AC267084F715CB60C551796FF6F12FC73D4916B2F8B39DAC514377F'
 $script:PortablePreviousHash = '6B8CCD673E96817095933BDAA170DC76D7995D27EC6CB41921F9E794A92F5AE3'
+$script:PortableFixedPreviousHash = '52776E6B2D105DF4CD0FF7EC8933E8170F7A404D1D6FD68288CA5C44AF0CC0AD'
 $script:PortableOriginalHash = '97BA57FD47A393A3A4BBFA684D0F03D10CF04344FBD99CB2D2E8626675BE9C94'
 $script:PortableV2Hash = '4AE8AB0793EEBCEA5E23C1B8931A6C0057393BBCF413A9AF323D91750D3EE143'
 $script:PortableLoaderHash = 'E17F8CE7CA6936A5984AF16BB2751F305B3F72F556D0C7D2AD31C2C9EE70D119'
 $script:PortableV2LoaderHash = '803870E3FDA683443471E835699B065293724DC7E0F3289D0093FC84C8E30935'
 $script:PortableNativeControlHash = 'C7457983D5B09B8F1A4D4770F4386E5750077D1A29B4F285D1ABDFC83615C5CB'
 $script:PortableDeltaHashes = @{
-    'original-to-portable.json' = '24DD397BBFD5824AF3B3D3A04741777F8E7BAC36A2715578C78D7BC8CE7FDDBA'
-    'v2-to-portable.json' = '3F28B6F6CB8C7438A4FAC3EC4FC34E9C223597CFADF0AF3BCB16157C8DB638D9'
-    'portable-v3-to-fixed.json' = '4F07C27AEEC14B59984C10AF478DA1E7A5DFC22DF06E4B881773C21AA44F4798'
+    'original-to-portable.json' = '299C25A4B519818E63410DA39BB54FC1F9B2C7724881A0A9C893FAE1177E4E07'
+    'v2-to-portable.json' = '26B0CB8BB5F9667921D910487775EDA101B996DF62CA9A4EA0CC47F16F2C2C1F'
+    'portable-v3-to-fixed.json' = '149E99D59E910C4E73C25BC3F267B344A991711677A166E3B9BB9B72D4E1C8B4'
+    'portable-fixed-to-compatible.json' = '24D4F4B2137613AD6A8F420568DAF85745308DFC662414AB72CA338A848413E5'
+}
+function Get-PortablePreviousHashes { return @($script:PortablePreviousHash,$script:PortableFixedPreviousHash) }
+
+function Read-PortableRuntimeEvents([byte[]]$Bytes,[byte[]]$Key) {
+    if (-not ('LOLPallasRuntimeLogReader' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Text;
+public sealed class LOLPallasRuntimeEvent {
+    public long UnixTime; public string Kind; public int Value;
+}
+public static class LOLPallasRuntimeLogReader {
+    public static LOLPallasRuntimeEvent[] Read(byte[] bytes, byte[] key) {
+        if (bytes.Length > 16777216 || key.Length != 128) throw new ArgumentException("Log/key bounds");
+        var result = new List<LOLPallasRuntimeEvent>();
+        var utf16 = new UnicodeEncoding(false, false, true);
+        int at = 0;
+        while (at + 168 <= bytes.Length) {
+            uint size = BitConverter.ToUInt32(bytes, at);
+            if (size < 170 || size > 1048576) throw new ArgumentException("TLG record size");
+            if (size > bytes.Length - at) break; // Concurrent append, incomplete tail.
+            int start = BitConverter.ToUInt16(bytes, at + 60);
+            int end = BitConverter.ToUInt16(bytes, at + 62);
+            if (start < 168 || end < start || end > size || ((end - start) & 1) != 0)
+                throw new ArgumentException("TLG field bounds");
+            byte[] plain = new byte[end - start];
+            for (int i = 0; i < plain.Length; i++) plain[i] = (byte)(bytes[at + start + i] ^ key[i % 128]);
+            string text = utf16.GetString(plain).TrimEnd('\0');
+            string kind = null; int value = 0;
+            if (text.StartsWith("OnGameStart, game_id:")) kind = "game-start";
+            else if (text.StartsWith("lol game end, set tenpallas path empty.")) kind = "game-end";
+            else if (text.StartsWith("OnGetShoutMessageRsp, send chat content to tp")) kind = "scheme-dispatched";
+            else if (text.StartsWith("SendGetShoutMessage, req:")) kind = "scheme-requested";
+            else if (text.StartsWith("ChekInGameRunStatus ten_pallas_run_flg=")) {
+                kind = "assistant-run-flag";
+                string token = text.Substring("ChekInGameRunStatus ten_pallas_run_flg=".Length).Split(',')[0];
+                if (!Int32.TryParse(token, out value)) throw new ArgumentException("Run flag format");
+            }
+            if (kind != null) result.Add(new LOLPallasRuntimeEvent {
+                UnixTime = BitConverter.ToInt64(bytes, at + 32), Kind = kind, Value = value });
+            // No raw payloads, account IDs, commands, messages or tokens returned.
+            at += (int)size;
+        }
+        return result.ToArray();
+    }
+}
+'@
+    }
+    return [LOLPallasRuntimeLogReader]::Read($Bytes,$Key)
+}
+function Get-PortableRuntimeEvidence($Context,$Record) {
+    $path = Join-Path $Context.Root 'apps\Pallas\log\pallas.tlg'
+    $logger = Join-Path $Context.Root 'apps\Pallas\tx_log.dll'
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf) -or
+        (Get-ShoutFileHash $logger) -ne '8548579CF3DC0A2EDEFDA388FAD2177BCEF98F0AA4B6F61F9EB87B56F1574F66') {
+        return [pscustomobject]@{ Stage='unknown'; Reason='No supported local runtime log.' }
+    }
+    [void](Assert-PortablePath $path); [void](Assert-PortablePath $logger)
+    $key = New-Object byte[] 128; $loggerBytes = [IO.File]::ReadAllBytes($logger)
+    [Array]::Copy($loggerBytes,146712,$key,0,128)
+    if ([BitConverter]::ToString($key,0,10) -ne 'E9-29-CE-76-E1-45-11-7E-33-51') { throw 'Unsupported logger table.' }
+    $latest = $null
+    foreach ($entry in @(Read-PortableRuntimeEvents ([IO.File]::ReadAllBytes($path)) $key)) {
+        if ($entry.Kind -eq 'game-start') {
+            $latest = [ordered]@{ Stage='unknown'; LastGameStartedUtc=([DateTimeOffset]::FromUnixTimeSeconds($entry.UnixTime).UtcDateTime.ToString('o'))
+                RunFlag=$null; SchemeRequested=$false; SchemeDispatched=$false; GameClosed=$false
+                MatchesCurrentInstall=$false; GameSendVerified=$false }
+        } elseif ($latest) {
+            switch ($entry.Kind) {
+                'game-end' { $latest.GameClosed=$true }
+                'assistant-run-flag' { $latest.RunFlag=$entry.Value }
+                'scheme-requested' { $latest.SchemeRequested=$true }
+                'scheme-dispatched' { $latest.SchemeDispatched=$true }
+            }
+        }
+    }
+    if (-not $latest) { return [pscustomobject]@{ Stage='unknown'; Reason='No game session in the available log.' } }
+    $since = [DateTime]::MinValue
+    foreach ($field in @('installed_at','upgraded_at')) {
+        if ($Record -and $Record.$field) {
+            $value = [DateTimeOffset]::Parse([string]$Record.$field).UtcDateTime
+            if ($value -gt $since) { $since=$value }
+        }
+    }
+    $latest.MatchesCurrentInstall = $null -ne $Record -and
+        [DateTimeOffset]::Parse($latest.LastGameStartedUtc).UtcDateTime -ge $since
+    if ($latest.RunFlag -eq 0) { $latest.Stage='assistant-not-running' }
+    elseif ($latest.SchemeDispatched) { $latest.Stage='scheme-dispatched-game-send-unverified' }
+    elseif ($null -ne $latest.RunFlag -and $latest.RunFlag -gt 0) { $latest.Stage='assistant-running-awaiting-scheme' }
+    return [pscustomobject]$latest
 }
 
 function Get-PortableSid { return [Security.Principal.WindowsIdentity]::GetCurrent().User.Value }
@@ -111,7 +204,7 @@ function Assert-PortableLoader($Context) {
 function Assert-PortableBaseline($Context) {
     Assert-PortableLoader $Context
     $hash = Get-ShoutFileHash $Context.Dll
-    if ($hash -eq $script:PortablePreviousHash) {
+    if ($hash -in (Get-PortablePreviousHashes)) {
         $previous = Read-PortableState $Context
         if ($previous.candidate_dll_sha256 -ne $hash -or $previous.status -ne 'installed-awaiting-game-test') { throw 'Previous portable install needs review.' }
         Assert-ShoutHash $Context.Library $previous.installed_library_sha256
@@ -177,7 +270,8 @@ function Backup-PortableFile([string]$Source, [string]$Destination, [string]$Has
 }
 function Save-PortableState($Context, $Record) {
     $current = Get-ShoutFileHash $Context.Dll
-    if ($current -notin @($script:PortableTargetHash,$script:PortablePreviousHash,$Record.baseline_dll_sha256)) { throw 'Unknown DLL; state commit refused.' }
+    if ($current -ne $script:PortableTargetHash -and $current -ne $Record.baseline_dll_sha256 -and
+        $current -notin (Get-PortablePreviousHashes)) { throw 'Unknown DLL; state commit refused.' }
     $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes(($Record | ConvertTo-Json -Depth 5))
     Write-PortableFile $Context $bytes $Context.State $Context.StateHash $current
     $Context.StateHash = Get-ShoutByteHash $bytes
@@ -186,7 +280,8 @@ function Read-PortableState($Context) {
     $hash = Get-ShoutFileHash $Context.State
     $record = Get-Content -LiteralPath $Context.State -Raw -Encoding UTF8 | ConvertFrom-Json
     $stockRestored = $record.status -eq 'original-components-restored'
-    $knownCandidate = $record.candidate_dll_sha256 -in @($script:PortableTargetHash,$script:PortablePreviousHash)
+    $knownCandidate = $record.candidate_dll_sha256 -eq $script:PortableTargetHash -or
+        $record.candidate_dll_sha256 -in (Get-PortablePreviousHashes)
     if ($stockRestored -and $record.candidate_dll_sha256 -eq $script:PortableNativeControlHash) { $knownCandidate = $true }
     if ($record.experiment -ne 'portable-hotkeys-v3' -or $record.sid -ne $Context.Sid -or
         $record.wegame_root -ne $Context.Root -or $record.dll_path -ne $Context.Dll -or
@@ -259,7 +354,7 @@ function Restore-PortableComponent($Context, $Record) {
 function Install-PortableComponent($Context, $Compiled, [byte[]]$Candidate) {
     Assert-ShoutStopped; $baseline = Assert-PortableBaseline $Context
     if ((Get-ShoutByteHash $Candidate) -ne $script:PortableTargetHash) { throw 'Candidate hash mismatch.' }
-    if ($baseline -eq $script:PortablePreviousHash) { return Upgrade-PortableComponent $Context $Candidate }
+    if ($baseline -in (Get-PortablePreviousHashes)) { return Upgrade-PortableComponent $Context $Candidate }
     if (Test-Path -LiteralPath $Context.State) {
         $previous = Read-PortableState $Context
         if ($previous.status -eq 'original-components-restored') { return Reinstall-PortableFromStock $Context $Candidate }
@@ -384,18 +479,19 @@ function Apply-PortableMessages($Context, $Compiled) {
 }
 
 function Upgrade-PortableComponent($Context, [byte[]]$Candidate,
-    [string]$Revision = 'input-loader-r1', [string]$KeyboardMode = 'independent') {
+    [string]$Revision = 'original-imports-compat-r1', [string]$KeyboardMode = 'independent') {
     Assert-ShoutStopped; Assert-PortableLoader $Context; $record = Read-PortableState $Context
-    if ($record.candidate_dll_sha256 -ne $script:PortablePreviousHash -or
+    $previousHash = $record.candidate_dll_sha256
+    if ($previousHash -notin (Get-PortablePreviousHashes) -or
         (Get-ShoutByteHash $Candidate) -ne $script:PortableTargetHash) { throw 'Unsupported upgrade source/target.' }
-    Assert-ShoutHash $Context.Dll $script:PortablePreviousHash
+    Assert-ShoutHash $Context.Dll $previousHash
     Assert-ShoutHash $Context.Library $record.installed_library_sha256
     Assert-ShoutHash $Context.Source $record.installed_source_sha256
     $beforeState = $Context.StateHash
     $backupRoot = Join-Path $Context.Data ('backups\upgrade-' + [guid]::NewGuid().ToString('N'))
     [void](Assert-PortablePath $backupRoot); New-Item -ItemType Directory -Path $backupRoot | Out-Null
     $savedDll = Join-Path $backupRoot 'TenPallas.previous.dll'; $savedState = Join-Path $backupRoot 'state.previous.json'
-    Backup-PortableFile $Context.Dll $savedDll $script:PortablePreviousHash
+    Backup-PortableFile $Context.Dll $savedDll $previousHash
     Backup-PortableFile $Context.State $savedState $beforeState
     $updated = $record | ConvertTo-Json -Depth 5 | ConvertFrom-Json
     $updated.candidate_dll_sha256 = $script:PortableTargetHash
@@ -404,7 +500,7 @@ function Upgrade-PortableComponent($Context, [byte[]]$Candidate,
     $updated | Add-Member -NotePropertyName keyboard_mode -NotePropertyValue $KeyboardMode -Force
     $updated | Add-Member -NotePropertyName upgraded_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force
     try {
-        Write-PortableFile $Context $Candidate $Context.Dll $script:PortablePreviousHash $script:PortablePreviousHash
+        Write-PortableFile $Context $Candidate $Context.Dll $previousHash $previousHash
         Assert-ShoutHash $Context.Library $record.installed_library_sha256
         Assert-ShoutHash $Context.Source $record.installed_source_sha256
         Save-PortableState $Context $updated
@@ -412,13 +508,13 @@ function Upgrade-PortableComponent($Context, [byte[]]$Candidate,
         $failure = $_.Exception.Message; $nowDll = Get-ShoutFileHash $Context.Dll
         $newStateHash = Get-ShoutByteHash ((New-Object Text.UTF8Encoding($false)).GetBytes(($updated | ConvertTo-Json -Depth 5)))
         $nowState = Get-ShoutFileHash $Context.State
-        if ($nowDll -notin @($script:PortablePreviousHash,$script:PortableTargetHash) -or
+        if ($nowDll -notin @($previousHash,$script:PortableTargetHash) -or
             $nowState -notin @($beforeState,$newStateHash)) { throw ('Concurrent change: upgrade rollback refused. Backups: ' + $backupRoot) }
         if ($nowDll -eq $script:PortableTargetHash) {
             Write-PortableFile $Context ([IO.File]::ReadAllBytes($savedDll)) $Context.Dll $nowDll $nowDll
         }
         if ($nowState -ne $beforeState) {
-            Write-PortableFile $Context ([IO.File]::ReadAllBytes($savedState)) $Context.State $nowState $script:PortablePreviousHash
+            Write-PortableFile $Context ([IO.File]::ReadAllBytes($savedState)) $Context.State $nowState $previousHash
         }
         $Context.StateHash = $beforeState
         throw ('Upgrade failed; previous component/state restored, texts untouched: ' + $failure)

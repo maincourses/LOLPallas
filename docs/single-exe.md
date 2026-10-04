@@ -1,6 +1,6 @@
 # 单文件 EXE 测试版
 
-只需分享 `LOLPallas-Reinstall-Test-日期.exe`，双击打开中文编辑器；不需要自行解压 ZIP，不需要 Python、编译器或 Codex。要求 64 位 Windows 10/11 及其系统 Windows PowerShell 5.1／.NET Framework；组件兼容性仍由固定 SHA256 约束。
+当前候选是 `LOLPallas-LoadCompat-Test-日期.exe`，双击打开中文编辑器；不需要自行解压 ZIP，不需要 Python、编译器或 Codex。要求 64 位 Windows 10/11 及其系统 Windows PowerShell 5.1／.NET Framework；组件兼容性仍由固定 SHA256 约束。游戏内发送未验证前，不作为已可用版本推荐给别人。
 
 ## 使用
 
@@ -45,3 +45,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/Build-Standalone.ps1
 修复候选通过 8 项格式测试、159 项隔离原生逻辑检查、17 项真实文件读取检查和 62 项便携安装事务检查。另用自编最小 DLL 的 3 项正常 Windows 加载检查复现旧导入布局失败、验证修复布局；这项测试不加载腾讯 DLL，不能替代真实 WeGame／游戏验证。
 
 重装兼容另通过 65 项隔离检查，覆盖历史二十键／v2 基线记录、原版重建基线、运行文案与草稿保留、还原和再次启用、坏备份／外部改动／账号和路径不匹配拒绝，以及状态写入前后失败的回滚。EXE 内嵌文件逐项校验，仍不包含个人文案或完整腾讯组件。
+# 当前加载兼容性测试版
+
+2026-10-05：安装前请先彻底退出游戏与 WeGame；本版尝试修复“文件已装好，但游戏助手未报告运行”的兼容问题，保留原导入表，不修改 `pallas.exe`。64 KiB 容量、文案和独立键位不变。已安装 `52776E...0CC0AD` 的用户点“安装／启用”升级，所有历史备份与原版恢复基线保留。
+
+“安装状态”新增最近一局的运行诊断。`RunFlag=0` 表示未报告运行，`SchemeDispatched=true` 仅表示方案下发，二者都不能证明游戏发送成功。`MatchesCurrentInstall=false` 表示记录来自升级前的旧局。本版仍是待游戏验证的测试候选；遇到安全／完整性拒绝请还原，不绕过保护。

@@ -116,7 +116,7 @@ def link_split(obj, base, code_rva, data_rva, externals):
                      for i, s in enumerate(coff.sections, 1) if s["name"] == ".pdata")
     return code, data, exports, pdata
 
-def patch(original, obj, existing_imports=None, preserve_iat=False, replace_keyboard=True):
+def patch(original, obj, existing_imports=None, preserve_iat=False, replace_keyboard=True, append_user32=True):
     existing, _ = t.patch_copy(original)
     lib.verify_imports(original)
     pe = t.PE64(existing)
@@ -130,7 +130,7 @@ def patch(original, obj, existing_imports=None, preserve_iat=False, replace_keyb
         if s["name"] in (".data", ".bss"):
             writable_size = lib.align(writable_size, s["align"]) + len(s["data"])
     iat_offset = lib.align(writable_size, 8)
-    extra_names = ("GetAsyncKeyState", "GetForegroundWindow")
+    extra_names = ("GetAsyncKeyState", "GetForegroundWindow") if append_user32 else ()
     externals = {name: BASE + rva for name, rva in lib.IMPORT_RVAS.items()}
     externals.update({name: BASE + rva for name, rva in (existing_imports or {}).items()})
     externals.update(copy_string=lib.COPY_STRING, original_send=t.SENDER_VA)
@@ -157,18 +157,19 @@ def patch(original, obj, existing_imports=None, preserve_iat=False, replace_keyb
     descriptors = bytearray(); cursor = old_import_at
     while any(existing[cursor:cursor + 20]):
         descriptors.extend(existing[cursor:cursor + 20]); cursor += 20
-    while len(code) % 8: code.append(0)
-    import_offset = len(code); code.extend(descriptors + bytes(40))
-    lookup_rva = code_rva + len(code); lookup_at = len(code); code.extend(bytes(24))
-    dll_name_rva = code_rva + len(code); code.extend(b"USER32.dll\0")
-    data.extend(bytes(iat_offset - len(data)) + bytes(24))
-    for i, name in enumerate(extra_names):
-        while len(code) % 2: code.append(0)
-        name_rva = code_rva + len(code); code.extend(bytes(2) + name.encode() + b"\0")
-        struct.pack_into("<Q", code, lookup_at + i * 8, name_rva)
-        struct.pack_into("<Q", data, iat_offset + i * 8, name_rva)
-    struct.pack_into("<IIIII", code, import_offset + len(descriptors), lookup_rva, 0, 0,
-                     dll_name_rva, data_rva + iat_offset)
+    if append_user32:
+        while len(code) % 8: code.append(0)
+        import_offset = len(code); code.extend(descriptors + bytes(40))
+        lookup_rva = code_rva + len(code); lookup_at = len(code); code.extend(bytes(24))
+        dll_name_rva = code_rva + len(code); code.extend(b"USER32.dll\0")
+        data.extend(bytes(iat_offset - len(data)) + bytes(24))
+        for i, name in enumerate(extra_names):
+            while len(code) % 2: code.append(0)
+            name_rva = code_rva + len(code); code.extend(bytes(2) + name.encode() + b"\0")
+            struct.pack_into("<Q", code, lookup_at + i * 8, name_rva)
+            struct.pack_into("<Q", data, iat_offset + i * 8, name_rva)
+        struct.pack_into("<IIIII", code, import_offset + len(descriptors), lookup_rva, 0, 0,
+                         dll_name_rva, data_rva + iat_offset)
     if code_rva + len(code) > data_rva: raise ValueError("RX/RW sections overlap.")
     new_header = pe.sections[-1]["header"] + 40
     if new_header + 80 > min(s["raw"] for s in pe.sections) or existing[new_header:new_header + 80] != bytes(80):
@@ -190,7 +191,8 @@ def patch(original, obj, existing_imports=None, preserve_iat=False, replace_keyb
     for off, added in ((4, lib.align(len(code), 512)), (8, lib.align(len(data), 512))):
         struct.pack_into("<I", patched, optional + off, struct.unpack_from("<I", patched, optional + off)[0] + added)
     struct.pack_into("<I", patched, optional + 56, lib.align(data_rva + len(data), 4096))
-    struct.pack_into("<II", patched, optional + 112 + 8, code_rva + import_offset, len(descriptors) + 40)
+    if append_user32:
+        struct.pack_into("<II", patched, optional + 112 + 8, code_rva + import_offset, len(descriptors) + 40)
     struct.pack_into("<II", patched, optional + 112 + 3 * 8, code_rva + pdata_offset, len(records) * 12)
     struct.pack_into("<II", patched, optional + 112 + 4 * 8, new_cert, cert_size)
     # A moved import descriptor table with no IAT directory makes the Windows

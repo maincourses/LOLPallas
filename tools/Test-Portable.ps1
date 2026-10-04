@@ -1,5 +1,5 @@
 # Full portable verification, no installs or real game input.
-param([string]$BuildDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'build\portable-v3-r2'),
+param([string]$BuildDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'build\portable-v4-importcompat'),
     [string]$Python = 'D:\anaconda\python.exe')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
@@ -12,6 +12,8 @@ if ($LASTEXITCODE) { throw 'Own normal Windows loader tests failed.' }
 if ($LASTEXITCODE) { throw 'Portable transactions failed.' }
 & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tests\Test-Stock-Reinstall.ps1')
 if ($LASTEXITCODE) { throw 'Restored stock reinstallation failed.' }
+& $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tests\Test-Runtime-Log.ps1')
+if ($LASTEXITCODE) { throw 'Readonly runtime-log diagnostics failed.' }
 & $shell -NoProfile -STA -ExecutionPolicy Bypass -File (Join-Path $root 'Edit-Hotkeys-GUI.ps1') -Portable -SelfTest
 if ($LASTEXITCODE) { throw 'Portable GUI failed.' }
 Write-Host 'ALL PORTABLE OFFLINE TESTS PASSED. No live changes or real game sends.'

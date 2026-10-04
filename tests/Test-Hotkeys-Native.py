@@ -78,14 +78,21 @@ class Offline(unittest.TestCase):
         self.assertEqual(candidate[after.certificate_offset:], original[pe.certificate_offset:])
         header = struct.unpack_from("<I", candidate, 0x3C)[0] + 24
         rva, size = struct.unpack_from("<II", candidate, header + 112 + 8)
-        at = after.offset(m.BASE + rva, size) + size - 40
-        lookup, _, _, name, iat = struct.unpack_from("<IIIII", candidate, at)
-        self.assertEqual(candidate[after.offset(m.BASE + name, 11):][:11], b"USER32.dll\0")
-        for i, name in enumerate(("GetAsyncKeyState", "GetForegroundWindow")):
-            hint = struct.unpack_from("<Q", candidate, after.offset(m.BASE + lookup + 8 * i, 8))[0]
-            self.assertEqual(struct.unpack_from("<Q", candidate, after.offset(m.BASE + iat + 8 * i, 8))[0], hint)
-            pos = after.offset(m.BASE + hint + 2, len(name) + 1)
-            self.assertEqual(candidate[pos:pos + len(name) + 1], name.encode() + b"\0")
+        if manifest['native'].get('original_import_descriptors_preserved'):
+            old_header = struct.unpack_from('<I', original, 0x3C)[0] + 24
+            self.assertEqual(candidate[header+120:header+128], original[old_header+120:old_header+128])
+            at = after.offset(m.BASE + rva, size)
+            self.assertEqual(candidate[at:at+size], original[at:at+size])
+            self.assertEqual(manifest['native']['added_public_imports'], [])
+        else:
+            at = after.offset(m.BASE + rva, size) + size - 40
+            lookup, _, _, name, iat = struct.unpack_from("<IIIII", candidate, at)
+            self.assertEqual(candidate[after.offset(m.BASE + name, 11):][:11], b"USER32.dll\0")
+            for i, name in enumerate(("GetAsyncKeyState", "GetForegroundWindow")):
+                hint = struct.unpack_from("<Q", candidate, after.offset(m.BASE + lookup + 8 * i, 8))[0]
+                self.assertEqual(struct.unpack_from("<Q", candidate, after.offset(m.BASE + iat + 8 * i, 8))[0], hint)
+                pos = after.offset(m.BASE + hint + 2, len(name) + 1)
+                self.assertEqual(candidate[pos:pos + len(name) + 1], name.encode() + b"\0")
         for s in after.sections:
             flags = struct.unpack_from("<I", candidate, s['header'] + 36)[0]
             self.assertFalse(flags & 0x20000000 and flags & 0x80000000, "No RWX sections")
@@ -177,6 +184,15 @@ def native(real_io=False):
             if state.get('folder_fail'): return -2147467259
             text = c.create_unicode_buffer(state['folder']); c.memmove(output, text, c.sizeof(text)); return 0
         api['__imp_SHGetFolderPathW'] = wrap(WIN(c.c_int, c.c_void_p, c.c_int, c.c_void_p, c.c_uint32, c.c_void_p), folder)
+        if manifest['native'].get('original_import_descriptors_preserved'):
+            def module(name):
+                assert c.wstring_at(name) == 'USER32.dll'
+                return 0 if state.get('api_missing') else 42
+            def resolve(handle, name):
+                assert handle == 42
+                return api['__imp_' + c.string_at(name).decode()]
+            api['__imp_GetModuleHandleW'] = wrap(WIN(c.c_void_p, c.c_void_p), module)
+            api['__imp_GetProcAddress'] = wrap(WIN(c.c_void_p, c.c_void_p, c.c_void_p), resolve)
     copy_at = wrap(WIN(c.c_void_p, c.c_void_p, c.c_void_p), lambda dest, src: (state.update(copied=c.string_at(src)) or dest))
     send_at = wrap(WIN(None, c.c_void_p), lambda text: state['sent'].append(c.string_at(text)))
     externals = {}
@@ -198,7 +214,7 @@ def native(real_io=False):
         assert condition; assert not errors, errors; cases += 1
     def run(raw, source=None, **flags):
         state.update(file=raw, mods=0, win=False, sent=[], hwnd=1234, opens=0, closed=0, missing=False, read_error=False,
-                     folder=r'C:\Users\Sample\AppData\Local', folder_fail=False, corrupt_checksum=False)
+                     folder=r'C:\Users\Sample\AppData\Local', folder_fail=False, corrupt_checksum=False, api_missing=False)
         state.update(flags)
         if source is None: source = b'Cloud text ignored' if args.portable else f'{{"_lps_keys_v2":"{len(raw):08X}:{m.lib.fnv1a(raw):08X}","key":1}}'.encode()
         text = c.create_string_buffer(source); assert load(0x2222, c.addressof(text)) == 0x2222
@@ -285,6 +301,13 @@ def native(real_io=False):
                     check(not run(raw, source=src))
                 check(not run(raw, source=b'{}')); check(not run(raw, source=b'{"_lps_keys_v2":"0000004E:00000000","key":1}'))
             else:
+                if manifest['native'].get('original_import_descriptors_preserved'):
+                    check(run(raw, api_missing=True)); event(0x31,8); check(not state['sent'])
+                    state['api_missing'] = False; event(0x31,8,0x101); event(0x31,8)
+                    # Recovery after normal public APIs become available requires
+                    # fresh modifier events; focus reset does not replay held keys.
+                    check(not state['sent']); event(0x31,0,0x101); event(0x31,8)
+                    check(state['sent'] == [b'Message one'])
                 check(run(raw, source=b'{}')); check(run(raw, source=b'Bad cloud JSON is not parsed'))
                 for path in (r'E:\Profiles\Different\Local', 'C:\\Users\\\u4e2d\u6587\u6635\u79f0\\AppData\\Local'):
                     check(run(raw, folder=path)); event(0x31, 8); check(state['sent'] == [b'Message one'])

@@ -12,8 +12,28 @@ typedef void *HANDLE;
 API HANDLE __stdcall CreateFileW(const WORD *, DWORD, DWORD, void *, DWORD, DWORD, HANDLE);
 API int __stdcall ReadFile(HANDLE, void *, DWORD, DWORD *, void *);
 API int __stdcall CloseHandle(HANDLE);
+#ifdef LPS_NO_NEW_IMPORTS
+/* Ordinary API lookup through already present KERNEL32 imports. Keep the PE
+ * import descriptors and IAT byte-for-byte identical to the inspected original.
+ * This neither loads a module nor bypasses a signature/integrity decision. */
+API HANDLE __stdcall GetModuleHandleW(const WORD *);
+API void *__stdcall GetProcAddress(HANDLE, const char *);
+static short GetAsyncKeyState(int key) {
+    HANDLE module = GetModuleHandleW(L"USER32.dll");
+    short (__stdcall *fn)(int) = module ?
+        (short (__stdcall *)(int))GetProcAddress(module, "GetAsyncKeyState") : 0;
+    return fn ? fn(key) : (short)-32768; /* Missing API fails closed. */
+}
+static HANDLE GetForegroundWindow(void) {
+    HANDLE module = GetModuleHandleW(L"USER32.dll");
+    HANDLE (__stdcall *fn)(void) = module ?
+        (HANDLE (__stdcall *)(void))GetProcAddress(module, "GetForegroundWindow") : 0;
+    return fn ? fn() : 0;
+}
+#else
 API short __stdcall GetAsyncKeyState(int);
 API HANDLE __stdcall GetForegroundWindow(void);
+#endif
 #ifdef LPS_PORTABLE
 API int __stdcall SHGetFolderPathW(HANDLE, int, HANDLE, DWORD, WORD *);
 #ifdef LPS_NATIVE_KEYS

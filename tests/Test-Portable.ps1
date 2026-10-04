@@ -1,5 +1,5 @@
 # Isolated fixture files only. No production WeGame/profile writes or DLL loads.
-param([string]$BuildDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'build\portable-v3-r2'))
+param([string]$BuildDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'build\portable-v4-importcompat'))
 $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent $PSScriptRoot
 . (Join-Path $project 'Manage-Pallas-Portable.ps1') -FunctionsOnly
@@ -17,7 +17,8 @@ Check ([Text.Encoding]::ASCII.GetString($compiled.LibraryBytes,0,7) -ceq 'LPSKEY
 Check ([BitConverter]::ToUInt32($compiled.LibraryBytes,16) -eq (Get-LibraryChecksum ([byte[]]$compiled.LibraryBytes[20..81]))) 'Payload checksum'
 foreach ($entry in @(@('original-to-portable.json','engine\assets\TenPallas.original.dll'),
     @('v2-to-portable.json','build\hotkeys-v2\TenPallas.hotkeys.experimental.dll'),
-    @('portable-v3-to-fixed.json','build\portable-v3-c\TenPallas.portable.experimental.dll'))) {
+    @('portable-v3-to-fixed.json','build\portable-v3-c\TenPallas.portable.experimental.dll'),
+    @('portable-fixed-to-compatible.json','build\portable-v3-r2\TenPallas.portable.experimental.dll'))) {
     $reconstructed = Expand-PortableDelta ([IO.File]::ReadAllBytes((Join-Path $project $entry[1]))) (Join-Path $BuildDirectory $entry[0]) $script:PortableDeltaHashes[$entry[0]]
     Check ((Get-ShoutByteHash $reconstructed) -eq $script:PortableTargetHash) 'Exact reconstruction including shorter v2 target'
 }
@@ -105,7 +106,7 @@ $upgraded = Install-PortableComponent $context $compiled $script:CandidateBytes
 Check ((Get-ShoutFileHash $context.Dll) -eq $script:PortableTargetHash) 'Upgrade installs fixed component'
 Check ((Get-ShoutFileHash $context.Library) -eq $upgradeLibrary -and (Get-ShoutFileHash $context.Source) -eq $upgradeSource) 'Upgrade never replaces existing texts with defaults'
 Check ($upgraded.baseline_dll_sha256 -eq $upgradeBaseline -and $upgraded.backup_id -eq $upgradeBackup) 'Upgrade retains original restore baseline'
-Check ((Read-PortableState $context).repair_revision -eq 'input-loader-r1') 'Upgrade state readback'
+Check ((Read-PortableState $context).repair_revision -eq 'original-imports-compat-r1') 'Upgrade state readback'
 $oldStateBytes = [IO.File]::ReadAllBytes($context.State)
 $old = Read-PortableState $context; $old.candidate_dll_sha256 = $script:PortablePreviousHash
 [IO.File]::WriteAllBytes($context.Dll,$utf8.GetBytes('fixture previous portable')); Save-PortableState $context $old
@@ -126,6 +127,14 @@ Reject { Install-PortableComponent $context $compiled $script:CandidateBytes }
 Check ((Get-ShoutFileHash $context.Dll) -eq $script:PortablePreviousHash -and (Read-PortableState $context).candidate_dll_sha256 -eq $script:PortablePreviousHash) 'Failed upgrade restores previous component and state'
 Check ((Get-ShoutFileHash $context.Library) -eq $upgradeLibrary -and (Get-ShoutFileHash $context.Source) -eq $upgradeSource) 'Failed upgrade retains texts'
 [void](Install-PortableComponent $context $compiled $script:CandidateBytes)
+# Current repaired-v3 -> compatibility control is also an explicit transition.
+$fixedBytes = $utf8.GetBytes('fixture fixed portable before import control')
+$script:PortableFixedPreviousHash = Get-ShoutByteHash $fixedBytes
+$fixed = Read-PortableState $context; $fixed.candidate_dll_sha256 = $script:PortableFixedPreviousHash
+[IO.File]::WriteAllBytes($context.Dll,$fixedBytes); Save-PortableState $context $fixed
+[void](Install-PortableComponent $context $compiled $script:CandidateBytes)
+Check ((Get-ShoutFileHash $context.Dll) -eq $script:PortableTargetHash) 'Current fixed-v3 control upgrade readback'
+Check ((Get-ShoutFileHash $context.Library) -eq $upgradeLibrary -and (Get-ShoutFileHash $context.Source) -eq $upgradeSource) 'Fixed-v3 upgrade retains exact applied texts'
 $script:FaultPath = $context.Source; $script:FaultHash = Get-ShoutByteHash (Get-PortableSourceBytes $compiled)
 Reject { Apply-PortableMessages $context $compiled }
 Check ((Get-ShoutFileHash $context.Library) -eq $changed.LibraryHash) 'Apply failure rolls back binary'

@@ -1,11 +1,11 @@
 # Whitelisted test package; no personal data or complete Tencent binaries.
-param([string]$BuildDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'build\portable-v3-r2'))
+param([string]$BuildDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'build\portable-v4-importcompat'))
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $root 'lib\PortableTools.ps1')
 $validation = Get-Content -LiteralPath (Join-Path $BuildDirectory 'validation.portable.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($validation.candidate_dll_sha256 -ne $script:PortableTargetHash -or $validation.unit_tests_passed -ne $true -or
-    $validation.unit_tests -ne 8 -or $validation.native.passed -ne $true -or $validation.native.cases -lt 159 -or
+    $validation.unit_tests -ne 8 -or $validation.native.passed -ne $true -or $validation.native.cases -lt 163 -or
     $validation.native_file_io.passed -ne $true -or $validation.native_file_io.cases -lt 17) { throw 'Required native validation missing/mismatched.' }
 $loader = Get-Content -LiteralPath (Join-Path $BuildDirectory 'validation.loader.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 if (-not $loader.passed -or -not $loader.own_fixture_only -or $loader.candidate_dll_sha256 -ne $script:PortableTargetHash) { throw 'Own normal Windows loader validation required.' }
@@ -15,6 +15,8 @@ $shell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.e
 if ($LASTEXITCODE) { throw 'Portable transaction tests failed.' }
 & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tests\Test-Stock-Reinstall.ps1')
 if ($LASTEXITCODE) { throw 'Restored stock reinstall tests failed.' }
+& $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tests\Test-Runtime-Log.ps1')
+if ($LASTEXITCODE) { throw 'Readonly runtime diagnostics tests failed.' }
 & $shell -NoProfile -STA -ExecutionPolicy Bypass -File (Join-Path $root 'Edit-Hotkeys-GUI.ps1') -Portable -SelfTest
 if ($LASTEXITCODE) { throw 'Portable detached GUI tests failed.' }
 $template = Read-HotkeyDocument (Join-Path $root 'portable\messages.example.json') -FormatVersion 3
@@ -28,7 +30,7 @@ foreach ($name in @('Install.cmd','Choose-WeGame.cmd','Open-Editor.cmd','Check.c
 }
 foreach ($name in @('Manage-Pallas-Portable.ps1','Start-Portable.ps1','Run-Portable-Admin.ps1','Edit-Hotkeys-GUI.ps1')) { $entries[$name] = Join-Path $root $name }
 foreach ($name in @('PortableTools.ps1','HotkeyTools.ps1','LibraryTools.ps1','ShoutTools.ps1','hotkeys-ui.zh-CN.json')) { $entries['lib/' + $name] = Join-Path $root ('lib\' + $name) }
-foreach ($name in @('original-to-portable.json','v2-to-portable.json','portable-v3-to-fixed.json')) {
+foreach ($name in @('original-to-portable.json','v2-to-portable.json','portable-v3-to-fixed.json','portable-fixed-to-compatible.json')) {
     Assert-ShoutHash (Join-Path $BuildDirectory $name) $script:PortableDeltaHashes[$name]
     $entries['patches/' + $name] = Join-Path $BuildDirectory $name
 }

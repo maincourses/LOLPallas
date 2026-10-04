@@ -32,7 +32,7 @@
   "nativeKeysSubtitle": "已停用独立组合键处理；按住 ~，再按数字或 F1～F10 发送。文案仍由本地编辑器管理。",
   "nativeKeysWarning": "此对照版固定二十条及原键位；暂不支持增删或改键。64 KiB 缓冲区和单条 50 UTF-16 单位保护不变，游戏效果待复测。",
   "nativeKeysNote": "保存并应用前退出游戏和托盘中的 WeGame。此界面仅编辑文案；请勿使用先前 EXE 的应用／安装／还原按钮。",
-  "standaloneTitle": "LoL 本地快捷喊话 · 原版重装兼容测试版 · 64 KiB",
+  "standaloneTitle": "LoL 本地快捷喊话 · 加载兼容性测试版 · 64 KiB",
   "standaloneApplyNote": "已恢复原版也可点“安装／启用”；重装保留已应用文案，草稿改动另点“保存并应用”。先退出游戏及 WeGame，再在训练模式测试。",
   "wegamePath": "WeGame 路径",
   "choose": "选择 WeGame",

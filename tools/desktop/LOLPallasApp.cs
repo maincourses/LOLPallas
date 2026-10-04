@@ -21,7 +21,7 @@ internal static class LOLPallasApp {
         "Edit-Hotkeys-GUI.ps1", "Manage-Pallas-Portable.ps1", "messages.example.json", "README.md",
         "lib/HotkeyTools.ps1", "lib/LibraryTools.ps1", "lib/ShoutTools.ps1", "lib/PortableTools.ps1",
         "lib/StandaloneTools.ps1", "lib/hotkeys-ui.zh-CN.json", "patches/original-to-portable.json",
-        "patches/v2-to-portable.json", "patches/portable-v3-to-fixed.json", "package-manifest.json"
+        "patches/v2-to-portable.json", "patches/portable-v3-to-fixed.json", "patches/portable-fixed-to-compatible.json", "package-manifest.json"
     };
     static readonly JavaScriptSerializer Json = new JavaScriptSerializer { MaxJsonLength = 4194304 };
     static string Sid { get { return WindowsIdentity.GetCurrent().User.Value; } }
