@@ -2,6 +2,12 @@
 
 WeGame 本地快捷喊话及中文编辑器。新版候选支持 **64 KiB 文案库、1～512 条消息、每条独立组合键**。本机仍使用 v2；另提供不绑定用户名和盘符的 **v3 分享测试包**，仍锁定经核验的 WeGame 组件版本。
 
+## 单文件 EXE
+
+`tools/Build-Standalone.ps1` 生成 `dist/LOLPallas-Test-日期.exe`，双击即可打开中文编辑器；路径选择、安装／启用、还原、导入／导出均在一个窗口，不需要自行解压或寻找 CMD。首次仍需退出游戏和 WeGame、选择安装目录并确认实验风险，不能免确认安装或保证任意版本可用。
+
+EXE 内置所有自身运行资源，首次自动校验并释放到当前用户的版本化缓存。个人文案和路径设置单独持久保存在 `%LOCALAPPDATA%\LOLPallasPortable\Editor`；移动／分享 EXE 不会携带私人文案。有旧 `messages.json` 可在界面“导入文案”。沿用 v3 的固定组件与发送逻辑，不自动改当前安装。EXE 未签名，组件签名失效及游戏内未验证的边界不变。详见 [EXE 使用与实现说明](docs/single-exe.md)。
+
 ## 分享测试包（v3）
 
 `tools/Build-Portable-Package.ps1` 生成干净 ZIP：自动检测／手动选择 WeGame、同用户管理员安装、本地编辑、应用和备份还原；接收者不需要 Python 或编译器。只带公共默认文案及二进制差异，不带个人 messages.json、备份或完整腾讯组件。
@@ -103,6 +109,8 @@ LOLPallas/
   tools/Build-Package.ps1    生成干净分发包
   tools/Build-Portable-Package.ps1  生成 v3 分享测试包
   tools/Test-Portable.ps1    v3 离线验证入口
+  tools/Build-Standalone.ps1 单文件 EXE 构建与验证
+  tools/desktop/            x64 .NET 宿主及启动清单
   Manage-Pallas-Portable.ps1 新版可移植安装／应用／还原
   portable/                 分享包入口模板、公共文案和说明
   tests/                     校验、控件和隔离文件测试

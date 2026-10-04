@@ -1,4 +1,5 @@
-param([switch]$SelfTest, [switch]$InitializeOnly, [string]$PreviewPath, [switch]$Portable)
+param([switch]$SelfTest, [switch]$InitializeOnly, [string]$PreviewPath, [switch]$Portable,
+    [switch]$Standalone, [string]$SourcePath, [string]$HostExecutable, [string]$HostExecutableHash)
 $ErrorActionPreference = 'Stop'
 trap {
     if (-not $SelfTest -and -not $InitializeOnly) {
@@ -11,7 +12,23 @@ trap {
 if (-not $Portable) { . (Join-Path $PSScriptRoot 'lib\EditorTools.ps1') }
 $script:BinaryVersion = 2
 if ($Portable) { . (Join-Path $PSScriptRoot 'lib\PortableTools.ps1'); $script:BinaryVersion = 3 }
+$providedSourcePath = $SourcePath
 $script:SourcePath = Join-Path $PSScriptRoot 'messages.json'
+if ($providedSourcePath) { $script:SourcePath = [IO.Path]::GetFullPath($providedSourcePath) }
+if ($Standalone) {
+    if (-not $Portable) { throw 'Standalone editor requires portable mode.' }
+    . (Join-Path $PSScriptRoot 'lib\StandaloneTools.ps1')
+    if (-not $SelfTest) { Assert-ShoutHash $HostExecutable $HostExecutableHash }
+    [void](Assert-PortablePath $script:SourcePath)
+    $script:EditorRoot = Split-Path -Parent $script:SourcePath
+    $script:SettingsPath = Join-Path $script:EditorRoot 'settings.json'
+    $script:Settings = $null; $script:SelectedWeGame = ''
+    if (-not $SelfTest) {
+        New-Item -ItemType Directory -Path $script:EditorRoot -Force | Out-Null
+        $script:Settings = Read-StandaloneSettings $script:SettingsPath
+        if ($script:Settings -and (Test-PortableRoot $script:Settings.Root)) { $script:SelectedWeGame = $script:Settings.Root }
+    }
+}
 if ($SelfTest) { $script:SourcePath = Join-Path $PSScriptRoot 'messages.example.json' }
 if (-not (Test-Path -LiteralPath $script:SourcePath)) {
     $legacy = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'PallasCustomShout\library20-v1.json'
@@ -39,19 +56,24 @@ Add-Type -AssemblyName System.Drawing
 [Windows.Forms.Application]::EnableVisualStyles()
 $script:Ui = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'lib\hotkeys-ui.zh-CN.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($Portable) { $script:Ui.title = $script:Ui.portableTitle; $script:Ui.applyNote = $script:Ui.portableApplyNote }
+if ($Standalone) { $script:Ui.title = $script:Ui.standaloneTitle; $script:Ui.applyNote = $script:Ui.standaloneApplyNote }
 $script:Loading = $false; $script:SavedDraft = ''; $script:Dirty = $false; $script:Valid = $false
 $script:View = @{}
 $form = New-Object Windows.Forms.Form
 $form.Text = $script:Ui.title; $form.Size = New-Object Drawing.Size(1100, 780)
+if ($Standalone) { $form.Size = New-Object Drawing.Size(1150, 850) }
 $form.MinimumSize = New-Object Drawing.Size(950, 640); $form.StartPosition = 'CenterScreen'
 $form.Font = New-Object Drawing.Font('Microsoft YaHei UI', 10)
 $form.BackColor = [Drawing.Color]::WhiteSmoke
 $layout = New-Object Windows.Forms.TableLayoutPanel
 $layout.Dock = 'Fill'; $layout.Padding = New-Object Windows.Forms.Padding(16)
 $layout.ColumnCount = 1; $layout.RowCount = 8
+if ($Standalone) { $layout.RowCount = 10 }
 foreach ($height in @(40, 48, 38)) { [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', $height))) }
+if ($Standalone) { [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', 40))) }
 [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Percent', 100)))
-foreach ($height in @(40, 40, 48, 34)) { [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', $height))) }
+$bottomHeights = @(40,40,48,34); if ($Standalone) { $bottomHeights = @(40,40,40,56,34) }
+foreach ($height in $bottomHeights) { [void]$layout.RowStyles.Add((New-Object Windows.Forms.RowStyle('Absolute', $height))) }
 $form.Controls.Add($layout)
 function Add-Label([string]$Text, [int]$Row) {
     $label = New-Object Windows.Forms.Label; $label.Text = $Text; $label.Dock = 'Fill'; $label.TextAlign = 'MiddleLeft'
@@ -63,6 +85,19 @@ $titlePanel = New-Object Windows.Forms.FlowLayoutPanel; $titlePanel.Dock = 'Fill
 $titleLabel = New-Object Windows.Forms.Label; $titleLabel.Text = $script:Ui.schemeTitle; $titleLabel.AutoSize = $true
 $titleBox = New-Object Windows.Forms.TextBox; $titleBox.Width = 380; $titleBox.MaxLength = 0
 $titlePanel.Controls.Add($titleLabel); $titlePanel.Controls.Add($titleBox); $layout.Controls.Add($titlePanel, 0, 2)
+$buttons = @{}; $wegameBox = $null
+if ($Standalone) {
+    $pathPanel = New-Object Windows.Forms.FlowLayoutPanel; $pathPanel.Dock = 'Fill'
+    $pathLabel = New-Object Windows.Forms.Label; $pathLabel.Text = $script:Ui.wegamePath; $pathLabel.AutoSize = $true
+    $pathPanel.Controls.Add($pathLabel)
+    $wegameBox = New-Object Windows.Forms.TextBox; $wegameBox.Width = 480; $wegameBox.ReadOnly = $true; $wegameBox.Text = $script:SelectedWeGame
+    $pathPanel.Controls.Add($wegameBox)
+    foreach ($name in @('choose','detect')) {
+        $button = New-Object Windows.Forms.Button; $button.Text = $script:Ui.$name; $button.Tag = $name
+        $button.AutoSize = $true; $button.Height = 32; $pathPanel.Controls.Add($button); $buttons[$name] = $button
+    }
+    $layout.Controls.Add($pathPanel,0,3)
+}
 $grid = New-Object Windows.Forms.DataGridView
 $grid.Dock = 'Fill'; $grid.AllowUserToAddRows = $false; $grid.AllowUserToDeleteRows = $false
 $grid.AllowUserToOrderColumns = $false; $grid.MultiSelect = $false; $grid.SelectionMode = 'FullRowSelect'
@@ -75,19 +110,29 @@ foreach ($entry in @(@('index', 45, $true), @('binding', 160, $false), @('messag
     [void]$grid.Columns.Add($column)
 }
 $grid.Columns['message'].DefaultCellStyle.WrapMode = 'True'
-$layout.Controls.Add($grid, 0, 3)
-$buttons = @{}
-foreach ($row in 4..5) {
+$gridRow = 3; if ($Standalone) { $gridRow = 4 }
+$layout.Controls.Add($grid, 0, $gridRow)
+foreach ($row in ($gridRow + 1)..($gridRow + 2)) {
     $panel = New-Object Windows.Forms.FlowLayoutPanel; $panel.Dock = 'Fill'
-    $names = @('add', 'remove', 'capture', 'reload'); if ($row -eq 5) { $names = @('save', 'apply', 'status') }
+    $names = @('add', 'remove', 'capture', 'reload'); if ($row -eq ($gridRow + 2)) { $names = @('save', 'apply', 'status') }
+    if ($Standalone -and $row -eq ($gridRow + 1)) { $names += @('import','export') }
     foreach ($name in $names) {
         $button = New-Object Windows.Forms.Button; $button.Text = $script:Ui.$name; $button.Tag = $name
         $button.AutoSize = $true; $button.Height = 32; $panel.Controls.Add($button); $buttons[$name] = $button
     }
     $layout.Controls.Add($panel, 0, $row)
 }
-$summary = Add-Label '' 6; $sourceLabel = Add-Label ($script:Ui.source + $script:SourcePath) 7
-$script:View = @{ Form = $form; Grid = $grid; Title = $titleBox; Summary = $summary; Buttons = $buttons }
+if ($Standalone) {
+    $panel = New-Object Windows.Forms.FlowLayoutPanel; $panel.Dock = 'Fill'
+    foreach ($name in @('install','restore','help')) {
+        $button = New-Object Windows.Forms.Button; $button.Text = $script:Ui.$name; $button.Tag = $name
+        $button.AutoSize = $true; $button.Height = 32; $panel.Controls.Add($button); $buttons[$name] = $button
+    }
+    $layout.Controls.Add($panel,0,7)
+}
+$summaryRow = 6; if ($Standalone) { $summaryRow = 8 }
+$summary = Add-Label '' $summaryRow; $sourceLabel = Add-Label ($script:Ui.source + $script:SourcePath) ($summaryRow + 1)
+$script:View = @{ Form = $form; Grid = $grid; Title = $titleBox; Summary = $summary; Buttons = $buttons; WeGame = $wegameBox }
 function Get-Draft {
     $draft = [ordered]@{ version = 2; title = $script:View.Title.Text; count = $script:View.Grid.Rows.Count }
     foreach ($row in $script:View.Grid.Rows) {
@@ -157,6 +202,10 @@ function Confirm-Discard {
     return [Windows.Forms.MessageBox]::Show($script:Ui.dirtyPrompt, $script:Ui.title, 'YesNo', 'Question') -eq 'Yes'
 }
 function Invoke-HotkeyBackend([string]$Mode) {
+    if ($Standalone) {
+        $root = Get-SelectedWeGame
+        return Invoke-StandaloneTask $HostExecutable $HostExecutableHash $Mode $root $script:SourcePath $script:EditorRoot
+    }
     $start = New-Object Diagnostics.ProcessStartInfo
     $start.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $backend = 'Manage-Pallas-Hotkeys.ps1'; if ($Portable) { $backend = 'Manage-Pallas-Portable.ps1' }
@@ -171,6 +220,63 @@ function Invoke-HotkeyBackend([string]$Mode) {
         $text = $out.GetAwaiter().GetResult() + $err.GetAwaiter().GetResult()
         if ($process.ExitCode) { throw $text }; return $text
     } finally { $process.Dispose() }
+}
+function Set-SelectedWeGame([string]$Root) {
+    if (-not (Test-PortableRoot $Root)) { throw $script:Ui.invalidWeGame }
+    $hash = $null; if ($script:Settings) { $hash = $script:Settings.Hash }
+    $script:Settings = Save-StandaloneSettings $script:SettingsPath $Root $hash
+    $script:SelectedWeGame = $script:Settings.Root; $script:View.WeGame.Text = $script:SelectedWeGame
+}
+function Choose-WeGame {
+    $dialog = New-Object Windows.Forms.FolderBrowserDialog; $dialog.Description = $script:Ui.chooseHint; $dialog.ShowNewFolderButton = $false
+    if ($script:SelectedWeGame) { $dialog.SelectedPath = $script:SelectedWeGame }
+    try { if ($dialog.ShowDialog($script:View.Form) -eq 'OK') { Set-SelectedWeGame $dialog.SelectedPath; return $true }; return $false }
+    finally { $dialog.Dispose() }
+}
+function Get-SelectedWeGame {
+    if (-not (Test-PortableRoot $script:SelectedWeGame)) {
+        try { Set-SelectedWeGame (Resolve-PortableRoot '' (Get-PortableDataRoot)) }
+        catch { if (-not (Choose-WeGame)) { throw $script:Ui.cancelled } }
+    }
+    return $script:SelectedWeGame
+}
+function Import-Messages {
+    if (-not (Confirm-Discard)) { return }
+    $dialog = New-Object Windows.Forms.OpenFileDialog; $dialog.Filter = 'JSON (*.json)|*.json'; $dialog.Title = $script:Ui.import
+    try {
+        if ($dialog.ShowDialog($script:View.Form) -eq 'OK') {
+            $imported = Read-HotkeyDocument $dialog.FileName -FormatVersion 3
+            $oldSaved = $script:SavedDraft; Set-Draft $imported.Compiled.Scheme; $script:SavedDraft = $oldSaved; Update-View
+            $script:View.Summary.Text = $script:Ui.imported
+        }
+    } finally { $dialog.Dispose() }
+}
+function Export-Messages {
+    [void]$script:View.Grid.EndEdit()
+    $compiled = ConvertTo-HotkeyArtifacts (Get-Draft | ConvertTo-Json -Depth 4) -FormatVersion 3
+    $dialog = New-Object Windows.Forms.SaveFileDialog; $dialog.Filter = 'JSON (*.json)|*.json'; $dialog.FileName = 'messages.json'; $dialog.Title = $script:Ui.export
+    try {
+        if ($dialog.ShowDialog($script:View.Form) -eq 'OK') {
+            if ([IO.Path]::GetFullPath($dialog.FileName) -eq $script:SourcePath) { Save-Draft }
+            else { [void](Save-HotkeyDocument $compiled.Scheme $dialog.FileName (Get-ShoutFileHash $dialog.FileName) -FormatVersion 3) }
+            $script:View.Summary.Text = $script:Ui.exported
+        }
+    } finally { $dialog.Dispose() }
+}
+function Install-FromEditor {
+    Save-Draft; $root = Get-SelectedWeGame
+    $context = New-PortableContext $root (Get-PortableDataRoot)
+    if ((Get-ShoutFileHash $context.Dll) -eq $script:PortableTargetHash -and (Test-Path -LiteralPath $context.State)) {
+        [void](Read-PortableState $context)
+        [void][Windows.Forms.MessageBox]::Show($script:Ui.alreadyInstalled,$script:Ui.title); return
+    }
+    if ([Windows.Forms.MessageBox]::Show($script:Ui.installPrompt,$script:Ui.title,'YesNo','Warning') -ne 'Yes') { return }
+    Assert-ShoutStopped
+    [void](Invoke-HotkeyBackend 'Install')
+    # Re-enabling preserves its earlier library; explicitly apply the visible draft if different.
+    $record = Read-PortableState $context
+    if ($record.installed_library_sha256 -ne $script:Document.Compiled.LibraryHash) { [void](Invoke-HotkeyBackend 'Apply') }
+    $script:View.Summary.Text = $script:Ui.installed
 }
 function Save-Draft {
     [void]$script:View.Grid.EndEdit(); Update-View
@@ -219,11 +325,25 @@ foreach ($button in $buttons.Values) { $button.Add_Click({ param($sender, $event
             'save' { Save-Draft; $script:View.Summary.Text = $script:Ui.saved }
             'apply' { Save-Draft; [void](Invoke-HotkeyBackend 'Apply'); $script:View.Summary.Text = $script:Ui.applied }
             'status' { [void][Windows.Forms.MessageBox]::Show((Invoke-HotkeyBackend 'Status'), $script:Ui.title) }
+            'choose' { [void](Choose-WeGame) }
+            'detect' { Set-SelectedWeGame (Resolve-PortableRoot '' (Get-PortableDataRoot)) }
+            'import' { Import-Messages }
+            'export' { Export-Messages }
+            'install' { Install-FromEditor }
+            'restore' {
+                if ([Windows.Forms.MessageBox]::Show($script:Ui.restorePrompt,$script:Ui.title,'YesNo','Warning') -eq 'Yes') {
+                    Assert-ShoutStopped; [void](Invoke-HotkeyBackend 'Restore'); $script:View.Summary.Text = $script:Ui.restored
+                }
+            }
+            'help' { [void][Windows.Forms.MessageBox]::Show($script:Ui.standaloneHelp,$script:Ui.title) }
         }
     } catch { [void][Windows.Forms.MessageBox]::Show($_.Exception.Message, $script:Ui.error, 'OK', 'Warning') }
 }) }
 $form.Add_FormClosing({ param($sender, $e) [void]$script:View.Grid.EndEdit(); Update-View; if (-not (Confirm-Discard)) { $e.Cancel = $true } })
 Set-Draft $script:Document.Compiled.Scheme
+if ($Standalone -and -not $SelfTest -and -not $script:SelectedWeGame) {
+    try { Set-SelectedWeGame (Resolve-PortableRoot '' (Get-PortableDataRoot)) } catch { $script:View.WeGame.Text = $script:Ui.wegameNotSelected }
+}
 if ($SelfTest) {
     if ($PreviewPath) {
         $absolute = [IO.Path]::GetFullPath($PreviewPath)
@@ -253,6 +373,12 @@ if ($SelfTest) {
     if (-not $script:Valid -or -not $script:Dirty) { throw 'Custom independent binding failed' }; $checks++
     $before = Get-ShoutFileHash $script:SourcePath
     if ($before -ne $script:Document.Hash) { throw 'SelfTest changed source' }; $checks++
+    if ($Standalone) {
+        if ($buttons.Count -ne 14 -or $layout.RowCount -ne 10 -or -not $wegameBox.ReadOnly) { throw 'Standalone toolbar/layout failed' }; $checks++
+        foreach ($name in @('choose','detect','install','restore','import','export','help')) {
+            if ($buttons[$name].Text -ne $script:Ui.$name) { throw ('Missing translated standalone action: ' + $name) }; $checks++
+        }
+    }
     $script:Dirty = $false; $form.Dispose()
     Write-Host ('PASS: ' + $checks + ' GUI self-tests (no window shown, no source/live writes).'); exit 0
 }
