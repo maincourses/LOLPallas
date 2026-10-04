@@ -25,6 +25,8 @@ v2 默认编译和库格式保持原样：加入条件编译后的 v2 构建仍�
 
 ## 构建和验证
 
+2026-10-05 新增 `stock-reinstall-r1`：同用户、路径、签名、哈希和备份都核验成功的 `original-components-restored` 记录，可从原版重新安装。历史候选二十键哈希仅在这个恢复状态下接纳，活跃的未知组件或部分恢复不接纳。新备份目录保存原版 DLL、旧安装记录及当前运行文案；还原基线切为原版，旧基线和全部备份仍保留。安装不写 `pallas.exe` 或编辑草稿，运行文案沿用原已应用库，草稿另行应用。额外隔离测试见 `tests/Test-Stock-Reinstall.ps1`。此修复未改变候选 DLL 的字节，不验证游戏发送。
+
 ```powershell
 D:\anaconda\python.exe tools/native/PallasPortable.py --out-dir build/NEW-portable
 D:\anaconda\python.exe tests/Test-Hotkeys-Native.py --build build/NEW-portable --portable

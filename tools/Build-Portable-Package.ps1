@@ -13,6 +13,8 @@ if (-not $loader.passed -or -not $loader.own_fixture_only -or $loader.candidate_
 $shell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tests\Test-Portable.ps1') -BuildDirectory $BuildDirectory
 if ($LASTEXITCODE) { throw 'Portable transaction tests failed.' }
+& $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tests\Test-Stock-Reinstall.ps1')
+if ($LASTEXITCODE) { throw 'Restored stock reinstall tests failed.' }
 & $shell -NoProfile -STA -ExecutionPolicy Bypass -File (Join-Path $root 'Edit-Hotkeys-GUI.ps1') -Portable -SelfTest
 if ($LASTEXITCODE) { throw 'Portable detached GUI tests failed.' }
 $template = Read-HotkeyDocument (Join-Path $root 'portable\messages.example.json') -FormatVersion 3
@@ -44,6 +46,7 @@ foreach ($entry in $entries.GetEnumerator()) {
     $records += [ordered]@{ path = $entry.Key; bytes = (Get-Item -LiteralPath $destination).Length; sha256 = $hash }
 }
 $manifest = [ordered]@{ project = 'LOLPallas'; release = 'portable-v3-TEST'; created_utc = [DateTime]::UtcNow.ToString('o')
+    installer_revision = 'stock-reinstall-r1'; restored_stock_reinstall_tested = $true
     game_send_verified = $false; fresh_pc_initialization_verified = $false; offline_native_cases = $validation.native.cases; offline_file_io_cases = $validation.native_file_io.cases
     offline_transaction_tests_passed = $true; offline_detached_gui_tests_passed = $true
     personal_messages_included = $false; full_proprietary_binaries_included = $false

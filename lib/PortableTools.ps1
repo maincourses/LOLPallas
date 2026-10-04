@@ -6,6 +6,7 @@ $script:PortableOriginalHash = '97BA57FD47A393A3A4BBFA684D0F03D10CF04344FBD99CB2
 $script:PortableV2Hash = '4AE8AB0793EEBCEA5E23C1B8931A6C0057393BBCF413A9AF323D91750D3EE143'
 $script:PortableLoaderHash = 'E17F8CE7CA6936A5984AF16BB2751F305B3F72F556D0C7D2AD31C2C9EE70D119'
 $script:PortableV2LoaderHash = '803870E3FDA683443471E835699B065293724DC7E0F3289D0093FC84C8E30935'
+$script:PortableNativeControlHash = 'C7457983D5B09B8F1A4D4770F4386E5750077D1A29B4F285D1ABDFC83615C5CB'
 $script:PortableDeltaHashes = @{
     'original-to-portable.json' = '24DD397BBFD5824AF3B3D3A04741777F8E7BAC36A2715578C78D7BC8CE7FDDBA'
     'v2-to-portable.json' = '3F28B6F6CB8C7438A4FAC3EC4FC34E9C223597CFADF0AF3BCB16157C8DB638D9'
@@ -184,10 +185,13 @@ function Save-PortableState($Context, $Record) {
 function Read-PortableState($Context) {
     $hash = Get-ShoutFileHash $Context.State
     $record = Get-Content -LiteralPath $Context.State -Raw -Encoding UTF8 | ConvertFrom-Json
+    $stockRestored = $record.status -eq 'original-components-restored'
+    $knownCandidate = $record.candidate_dll_sha256 -in @($script:PortableTargetHash,$script:PortablePreviousHash)
+    if ($stockRestored -and $record.candidate_dll_sha256 -eq $script:PortableNativeControlHash) { $knownCandidate = $true }
     if ($record.experiment -ne 'portable-hotkeys-v3' -or $record.sid -ne $Context.Sid -or
         $record.wegame_root -ne $Context.Root -or $record.dll_path -ne $Context.Dll -or
         $record.library_path -ne $Context.Library -or $record.source_path -ne $Context.Source -or
-        $record.candidate_dll_sha256 -notin @($script:PortableTargetHash,$script:PortablePreviousHash) -or
+        -not $knownCandidate -or
         $record.baseline_dll_sha256 -notin @($script:PortableOriginalHash,$script:PortableV2Hash) -or
         $record.loader_sha256 -ne $Context.LoaderHash -or $record.backup_id -notmatch '^[a-f0-9]{32}$' -or
         $record.installed_library_sha256 -notmatch '^[A-Fa-f0-9]{64}$' -or $record.installed_source_sha256 -notmatch '^[A-Fa-f0-9]{64}$') {
@@ -195,7 +199,46 @@ function Read-PortableState($Context) {
     }
     $backup = Join-Path $Context.Data ('backups\' + $record.backup_id + '\TenPallas.before.dll')
     [void](Assert-PortablePath $backup); Assert-ShoutHash $backup $record.baseline_dll_sha256
+    if ($stockRestored) { Assert-PortableStockRestoration $Context $record }
     Assert-ShoutHash $Context.State $hash; $Context.StateHash = $hash; return $record
+}
+function Get-PortableRestoreBackup($Context,[string]$Path,[string]$Prefix) {
+    if (-not $Path) { throw 'Missing stock restoration backup; no changes.' }
+    $full = Assert-PortablePath $Path
+    $parent = [IO.Path]::GetDirectoryName($full)
+    $expected = [IO.Path]::GetFullPath((Join-Path $Context.Data 'backups'))
+    if (-not $parent.Equals($expected,[StringComparison]::OrdinalIgnoreCase) -or
+        [IO.Path]::GetFileName($full) -notmatch ('^' + [regex]::Escape($Prefix) + '[a-f0-9]{32}$')) {
+        throw 'Restoration backup is outside this profile or has an unknown layout.'
+    }
+    return $full
+}
+function Assert-PortableStockRestoration($Context,$Record) {
+    # This is an explicit known transition, not acceptance of arbitrary old states.
+    # Check before Assert-PortableBaseline: its previous-version branch reads state.
+    Assert-ShoutHash $Context.Dll $script:PortableOriginalHash
+    if ($Record.original_dll_sha256 -ne $script:PortableOriginalHash -or
+        $Record.original_launcher_sha256 -ne $script:PortableLoaderHash -or
+        $Record.loader_sha256 -ne $script:PortableLoaderHash -or $Record.keyboard_mode -ne 'original' -or
+        (Assert-PortableBaseline $Context) -ne $script:PortableOriginalHash) { throw 'Restored stock pair does not match pinned signed originals.' }
+    $dllBackup = Get-PortableRestoreBackup $Context $Record.original_dll_restore_backup 'original-dll-restore-'
+    $loaderBackup = Get-PortableRestoreBackup $Context $Record.original_launcher_restore_backup 'original-loader-restore-'
+    $savedDll = Assert-PortablePath (Join-Path $dllBackup 'TenPallas.previous.dll')
+    $savedLoader = Assert-PortablePath (Join-Path $loaderBackup 'pallas.previous.exe')
+    Assert-ShoutHash $savedDll $Record.candidate_dll_sha256
+    Assert-ShoutHash $savedLoader $script:PortableV2LoaderHash
+    $priorPath = Assert-PortablePath (Join-Path $loaderBackup 'portable-state.previous.json')
+    $priorHash = Get-ShoutFileHash $priorPath
+    $prior = Get-Content -LiteralPath $priorPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach ($key in @('experiment','sid','wegame_root','dll_path','library_path','source_path',
+        'baseline_dll_sha256','candidate_dll_sha256','backup_id','installed_library_sha256','installed_source_sha256','message_count')) {
+        if ($prior.$key -ne $Record.$key) { throw ('Restoration history mismatch: ' + $key) }
+    }
+    if ($prior.status -ne 'original-dll-restored' -or $prior.loader_sha256 -ne $script:PortableV2LoaderHash -or
+        $prior.original_dll_sha256 -ne $script:PortableOriginalHash) { throw 'Incomplete stock restoration history.' }
+    Assert-ShoutHash $priorPath $priorHash
+    Assert-ShoutHash (Assert-PortablePath $Context.Library) $Record.installed_library_sha256
+    Assert-ShoutHash (Assert-PortablePath $Context.Source) $Record.installed_source_sha256
 }
 function Get-PortableSourceBytes($Compiled) {
     return ,(New-Object Text.UTF8Encoding($false,$true)).GetBytes(($Compiled.Scheme | ConvertTo-Json -Depth 4) + "`r`n")
@@ -219,6 +262,7 @@ function Install-PortableComponent($Context, $Compiled, [byte[]]$Candidate) {
     if ($baseline -eq $script:PortablePreviousHash) { return Upgrade-PortableComponent $Context $Candidate }
     if (Test-Path -LiteralPath $Context.State) {
         $previous = Read-PortableState $Context
+        if ($previous.status -eq 'original-components-restored') { return Reinstall-PortableFromStock $Context $Candidate }
         if ($previous.baseline_dll_sha256 -ne $baseline -or $previous.status -ne 'restored') { throw 'Existing install: use the editor Apply button for edits. Prepared/failed records need review.' }
         Assert-ShoutHash $Context.Library $previous.installed_library_sha256
         Assert-ShoutHash $Context.Source $previous.installed_source_sha256
@@ -260,6 +304,58 @@ function Install-PortableComponent($Context, $Compiled, [byte[]]$Candidate) {
         throw ('Installation failed: ' + $failure + '. Texts/backups retained.')
     }
     return $record
+}
+function Reinstall-PortableFromStock($Context,[byte[]]$Candidate) {
+    Assert-ShoutStopped; Assert-PortableLoader $Context
+    $previous = Read-PortableState $Context
+    if ($previous.status -ne 'original-components-restored' -or
+        (Get-ShoutByteHash $Candidate) -ne $script:PortableTargetHash) { throw 'Not a supported stock reinstallation.' }
+    $applied = Read-HotkeyDocument $Context.Source -FormatVersion 3
+    if ($applied.Compiled.LibraryHash -ne $previous.installed_library_sha256 -or
+        $applied.Compiled.Scheme.count -ne $previous.message_count) { throw 'Applied source/library mismatch; no changes.' }
+    $beforeState = [IO.File]::ReadAllBytes($Context.State); $beforeHash = $Context.StateHash
+    if ((Get-ShoutByteHash $beforeState) -ne $beforeHash) { throw 'Installation state changed before stock reinstallation.' }
+    $id = [guid]::NewGuid().ToString('N'); $backup = Join-Path $Context.Data ('backups\' + $id)
+    [void](Assert-PortablePath $backup); [void](New-Item -ItemType Directory -Path $backup)
+    Backup-PortableFile $Context.Dll (Join-Path $backup 'TenPallas.before.dll') $script:PortableOriginalHash
+    $history = Join-Path $backup 'previous-installation-state.json'
+    Backup-PortableFile $Context.State $history $beforeHash
+    Backup-PortableFile $Context.Library (Join-Path $backup 'library.before.bin') $previous.installed_library_sha256
+    Backup-PortableFile $Context.Source (Join-Path $backup 'applied-messages.before.json') $previous.installed_source_sha256
+    $updated = [ordered]@{ experiment='portable-hotkeys-v3'; status='installed-awaiting-game-test'; sid=$Context.Sid
+        wegame_root=$Context.Root; dll_path=$Context.Dll; library_path=$Context.Library; source_path=$Context.Source
+        baseline_dll_sha256=$script:PortableOriginalHash; candidate_dll_sha256=$script:PortableTargetHash
+        loader_sha256=$Context.LoaderHash; backup_id=$id; installed_library_sha256=$previous.installed_library_sha256
+        installed_source_sha256=$previous.installed_source_sha256; message_count=$previous.message_count
+        installed_at=[DateTime]::UtcNow.ToString('o'); game_send_verified=$false; runtime_verified=$false
+        unsigned_experiment_accepted=$true; loader_modified=$false; keyboard_mode='independent'
+        repair_revision='stock-reinstall-r1'; predecessor_backup_id=$previous.backup_id
+        predecessor_state_path=$history; predecessor_state_sha256=$beforeHash }
+    $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes(($updated | ConvertTo-Json -Depth 5))
+    $afterHash = Get-ShoutByteHash $bytes
+    try {
+        Assert-ShoutHash $Context.State $beforeHash
+        Assert-PortableStockRestoration $Context $previous
+        Write-PortableFile $Context $Candidate $Context.Dll $script:PortableOriginalHash $script:PortableOriginalHash
+        Assert-ShoutHash $Context.Library $previous.installed_library_sha256
+        Assert-ShoutHash $Context.Source $previous.installed_source_sha256
+        Write-PortableFile $Context $bytes $Context.State $beforeHash $script:PortableTargetHash
+        $Context.StateHash = $afterHash
+        $result = Read-PortableState $Context
+    } catch {
+        $failure = $_.Exception.Message; $nowDll = Get-ShoutFileHash $Context.Dll; $nowState = Get-ShoutFileHash $Context.State
+        if ($nowDll -notin @($script:PortableOriginalHash,$script:PortableTargetHash) -or $nowState -notin @($beforeHash,$afterHash)) {
+            throw ('Concurrent change; stock reinstall rollback refused. Backups retained: ' + $backup)
+        }
+        if ($nowDll -ne $script:PortableOriginalHash) {
+            Write-PortableFile $Context ([IO.File]::ReadAllBytes((Join-Path $backup 'TenPallas.before.dll'))) $Context.Dll $nowDll $nowDll
+        }
+        if ($nowState -ne $beforeHash) { Write-PortableFile $Context $beforeState $Context.State $nowState $script:PortableOriginalHash }
+        $Context.StateHash = $beforeHash
+        throw ('Stock reinstall failed; signed original DLL and previous record recovered, texts untouched: ' + $failure)
+    }
+    Write-Host 'REINSTALLED FROM STOCK: signed original DLL is now the restore baseline; original launcher and existing texts unchanged. Earlier state/backups archived.'
+    return $result
 }
 function Apply-PortableMessages($Context, $Compiled) {
     Assert-ShoutStopped; Assert-PortableLoader $Context; $record = Read-PortableState $Context

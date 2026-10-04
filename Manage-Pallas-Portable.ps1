@@ -31,6 +31,9 @@ try {
         if (Test-Path -LiteralPath $context.State -PathType Leaf) {
             $record = Read-PortableState $context
             Write-Host ('State: ' + $record.status + '; messages: ' + $record.message_count)
+            if ($record.status -eq 'original-components-restored') {
+                Write-Host 'SIGNED ORIGINALS RESTORED: Install/Enable can establish a new ORIGINAL restore baseline; previous texts and all historical backups are retained.'
+            }
             Write-Host ('Library matching: ' + ((Get-ShoutFileHash $context.Library) -eq $record.installed_library_sha256))
             Write-Host ('Applied source matching: ' + ((Get-ShoutFileHash $context.Source) -eq $record.installed_source_sha256))
         } else { Write-Host 'No portable installation record. Install.cmd is required before Apply.' }

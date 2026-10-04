@@ -1,7 +1,7 @@
 # Isolated plaintext fixtures only; no Tencent binaries loaded or production writes.
 $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent $PSScriptRoot
-. (Join-Path $project 'Restore-Pallas-OriginalLauncher.ps1') -FunctionsOnly
+. (Join-Path $PSScriptRoot 'StockRestoreFixtures.ps1')
 $script:Checks = 0
 function Check($Condition,[string]$Label) { if (-not $Condition) { throw $Label }; $script:Checks++ }
 function Reject([scriptblock]$Action) { $failed = $false; try { & $Action | Out-Null } catch { $failed = $true }; Check $failed 'Expected refusal' }
@@ -16,29 +16,7 @@ function Get-AuthenticodeSignature {
 }
 $script:Signature = 'Valid'; $script:Running = $false
 function New-Fixture {
-    $folder = Join-Path $work ([guid]::NewGuid().ToString('N')); $root = Join-Path $folder 'WeGame'; $data = Join-Path $folder 'Profile'
-    [void](New-Item -ItemType Directory -Path (Join-Path $root 'apps\Pallas\tp_deps'),$data)
-    $dll = Join-Path $root 'apps\Pallas\tp_deps\TenPallas.dll'; $loader = Join-Path $root 'apps\Pallas\pallas.exe'
-    $stockDll = $utf8.GetBytes('fixture signed original DLL'); $stockExe = $utf8.GetBytes('fixture signed original launcher')
-    $modifiedExe = $utf8.GetBytes('fixture local file launcher')
-    [IO.File]::WriteAllBytes($dll,$stockDll); [IO.File]::WriteAllBytes($loader,$stockExe)
-    $script:PortableOriginalHash = Get-ShoutByteHash $stockDll; $script:OriginalDllHash = $script:PortableOriginalHash
-    $script:PortableLoaderHash = Get-ShoutByteHash $stockExe; $script:OriginalLauncherHash = $script:PortableLoaderHash
-    $script:PortableV2LoaderHash = Get-ShoutByteHash $modifiedExe; $script:ModifiedLauncherHash = $script:PortableV2LoaderHash
-    $candidate = $utf8.GetBytes('fixture native DLL'); $script:PortableTargetHash = Get-ShoutByteHash $candidate; $script:NativeKeysHash = $script:PortableTargetHash
-    $context = New-PortableContext $root $data
-    [void](Install-PortableComponent $context $compiled $candidate)
-    $record = Read-PortableState $context
-    $record | Add-Member -NotePropertyName keyboard_mode -NotePropertyValue 'original'
-    Write-PortableFile $context $stockDll $dll $script:PortableTargetHash $script:PortableTargetHash
-    $record.status = 'original-dll-restored'; Save-PortableState $context $record
-    [IO.File]::WriteAllBytes($loader,$modifiedExe); $context.LoaderHash = $script:ModifiedLauncherHash
-    $record.loader_sha256 = $context.LoaderHash; Save-PortableState $context $record
-    $script:StockPath = Join-Path $folder 'own-stock-launcher.bin'; [IO.File]::WriteAllBytes($script:StockPath,$stockExe)
-    $script:LegacyPath = Join-Path $folder 'legacy-state.json'
-    $legacy = [ordered]@{experiment='Pallas local-file scheme v1';status='installed';program_path=$loader;backup_path=$script:StockPath;original_sha256=$script:OriginalLauncherHash;candidate_sha256=$script:ModifiedLauncherHash;native_runtime_verified=$false;game_send_verified=$false}
-    [IO.File]::WriteAllBytes($script:LegacyPath,$utf8.GetBytes(($legacy | ConvertTo-Json)))
-    return $context
+    return New-StockRestoreFixture $work $compiled
 }
 $context = New-Fixture
 $before = Read-PortableState $context; $beforeState = Get-ShoutFileHash $context.State; $beforeLegacy = Get-ShoutFileHash $script:LegacyPath

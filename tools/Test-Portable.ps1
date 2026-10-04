@@ -10,6 +10,8 @@ if ($LASTEXITCODE) { throw 'Portable native tests failed.' }
 if ($LASTEXITCODE) { throw 'Own normal Windows loader tests failed.' }
 & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tests\Test-Portable.ps1') -BuildDirectory $BuildDirectory
 if ($LASTEXITCODE) { throw 'Portable transactions failed.' }
+& $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tests\Test-Stock-Reinstall.ps1')
+if ($LASTEXITCODE) { throw 'Restored stock reinstallation failed.' }
 & $shell -NoProfile -STA -ExecutionPolicy Bypass -File (Join-Path $root 'Edit-Hotkeys-GUI.ps1') -Portable -SelfTest
 if ($LASTEXITCODE) { throw 'Portable GUI failed.' }
 Write-Host 'ALL PORTABLE OFFLINE TESTS PASSED. No live changes or real game sends.'

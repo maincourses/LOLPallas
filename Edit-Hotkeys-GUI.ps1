@@ -284,6 +284,10 @@ function Install-FromEditor {
     Save-Draft; $root = Get-SelectedWeGame
     $context = New-PortableContext $root (Get-PortableDataRoot)
     $upgrading = (Get-ShoutFileHash $context.Dll) -eq $script:PortablePreviousHash
+    $stockReinstall = $false
+    if ((Get-ShoutFileHash $context.Dll) -eq $script:PortableOriginalHash -and (Test-Path -LiteralPath $context.State)) {
+        $stockReinstall = (Read-PortableState $context).status -eq 'original-components-restored'
+    }
     if ((Get-ShoutFileHash $context.Dll) -eq $script:PortableTargetHash -and (Test-Path -LiteralPath $context.State)) {
         [void](Read-PortableState $context)
         [void][Windows.Forms.MessageBox]::Show($script:Ui.alreadyInstalled,$script:Ui.title); return
@@ -293,9 +297,10 @@ function Install-FromEditor {
     [void](Invoke-HotkeyBackend 'Install')
     # Re-enabling preserves its earlier library; explicitly apply the visible draft if different.
     $record = Read-PortableState $context
-    if (-not $upgrading -and $record.installed_library_sha256 -ne $script:Document.Compiled.LibraryHash) { [void](Invoke-HotkeyBackend 'Apply') }
+    if (-not $upgrading -and -not $stockReinstall -and $record.installed_library_sha256 -ne $script:Document.Compiled.LibraryHash) { [void](Invoke-HotkeyBackend 'Apply') }
     $script:View.Summary.Text = $script:Ui.installed
     if ($upgrading) { $script:View.Summary.Text = $script:Ui.upgraded }
+    if ($stockReinstall) { $script:View.Summary.Text = $script:Ui.stockReinstalled }
 }
 function Save-Draft {
     [void]$script:View.Grid.EndEdit(); Update-View

@@ -141,6 +141,12 @@ internal static class LOLPallasApp {
             UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
             StandardOutputEncoding = Utf8, StandardErrorEncoding = Utf8, WorkingDirectory = Path.GetDirectoryName(script)
         };
+        // This app uses Windows PowerShell 5.1 built-ins only. A non-PowerShell
+        // intermediary can retain a PS7 module path and break Security loading.
+        // Limit ONLY this child's environment; never change user/system settings.
+        string modules = PlainPath(Path.Combine(Path.GetDirectoryName(Shell), "Modules"));
+        if (!Directory.Exists(modules)) throw new DirectoryNotFoundException("Windows PowerShell system modules are required.");
+        start.EnvironmentVariables["PSModulePath"] = modules;
         using (var process = Process.Start(start)) {
             Task<string> output = process.StandardOutput.ReadToEndAsync(), error = process.StandardError.ReadToEndAsync();
             process.WaitForExit(); return new RunResult { code = process.ExitCode, output = output.Result, error = error.Result };
@@ -215,6 +221,19 @@ internal static class LOLPallasApp {
         Refuse(delegate { Parse(new[]{"--action","validate","--wegame","","--scheme","","--job",new string('a',32),"--sid","foreign"}); },"reject other account");
         string ownFixture = Under(assets,"messages.example.json");
         RunResult validation = Backend(assets,"Validate","",ownFixture,false); Check(validation.code == 0,"embedded PS validation");
+        string securityProbe = Under(fixture,"security-module-probe.ps1");
+        File.WriteAllText(securityProbe, "$ErrorActionPreference = 'Stop'\r\n[Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)\r\n" +
+            "Import-Module Microsoft.PowerShell.Security -ErrorAction Stop\r\n" +
+            "$cmd = Get-Command Get-AuthenticodeSignature -CommandType Cmdlet\r\n" +
+            "if (-not ($cmd.Module.ModuleBase.Equals($PSHOME,[StringComparison]::OrdinalIgnoreCase) -or $cmd.Module.ModuleBase.StartsWith(($PSHOME + '\\'),[StringComparison]::OrdinalIgnoreCase))) { throw 'Wrong Security module' }\r\n" +
+            "if ((Get-AuthenticodeSignature -LiteralPath $PSCommandPath).Status.ToString() -ne 'NotSigned') { throw 'Own unsigned probe expected' }\r\n", Utf8);
+        string inheritedModules = Environment.GetEnvironmentVariable("PSModulePath");
+        RunResult security;
+        try {
+            Environment.SetEnvironmentVariable("PSModulePath", Under(fixture,"wrong-version-modules"));
+            security = RunPowerShell(securityProbe, "");
+        } finally { Environment.SetEnvironmentVariable("PSModulePath", inheritedModules); }
+        Check(security.code == 0,"system PS5 Security module and real signature API despite inherited module pollution");
         RunResult gui = RunPowerShell(Under(assets,"Edit-Hotkeys-GUI.ps1"),"-Portable -Standalone -SelfTest"); Check(gui.code == 0,"detached embedded GUI");
         string editor = Under(fixture,"Editor"), source = Under(editor,"messages.json");
         RunResult initialize = RunPowerShell(Under(assets,"Edit-Hotkeys-GUI.ps1"),"-Portable -Standalone -InitializeOnly -SourcePath " + Quote(source) +
@@ -230,20 +249,23 @@ internal static class LOLPallasApp {
         File.WriteAllBytes(ownFixture,new byte[]{1,2,3});
         Refuse(delegate { EnsureAssets(fixture); },"reject modified cache without overwriting it");
         Check(File.ReadAllBytes(ownFixture).Length == 3,"modified fixture retained");
-        Console.WriteLine(Json.Serialize(new { passed = true, checks = 15, fixture = fixture, gui = gui.output, validation = validation.output,
+        Console.WriteLine(Json.Serialize(new { passed = true, checks = 16, fixture = fixture, gui = gui.output, validation = validation.output,
             no_live_install_or_game_sends = true, no_proprietary_dll_loaded = true })); return 0;
     }
     [STAThread]
     static int Main(string[] args) {
         bool test = args.Length == 1 && args[0] == "--self-test";
         try {
-            try { Console.OutputEncoding = new UTF8Encoding(false); } catch (IOException) { }
+            try {
+                Console.OutputEncoding = new UTF8Encoding(false);
+                Console.SetError(new StreamWriter(Console.OpenStandardError(), Utf8) { AutoFlush = true });
+            } catch (IOException) { }
             if (!Environment.Is64BitOperatingSystem || !Environment.Is64BitProcess) throw new PlatformNotSupportedException("64-bit Windows is required.");
             if (test) return SelfTest();
             if (args.Length != 0) return Execute(args,UserRoot);
             Application.EnableVisualStyles(); return OpenEditor();
         } catch (Exception e) {
-            if (args.Length != 0) { try { Console.Error.WriteLine(e.Message); } catch (IOException) { } }
+            if (args.Length != 0) { try { Console.Error.WriteLine(test ? e.ToString() : e.Message); } catch (IOException) { } }
             else MessageBox.Show("\u7a0b\u5e8f\u672a\u80fd\u7ee7\u7eed\uff1a\r\n" + e.Message, "LOLPallas", MessageBoxButtons.OK,MessageBoxIcon.Warning);
             return 1;
         }
