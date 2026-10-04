@@ -16,6 +16,11 @@ API short __stdcall GetAsyncKeyState(int);
 API HANDLE __stdcall GetForegroundWindow(void);
 #ifdef LPS_PORTABLE
 API int __stdcall SHGetFolderPathW(HANDLE, int, HANDLE, DWORD, WORD *);
+#ifdef LPS_NATIVE_KEYS
+API HANDLE __stdcall GetProcessHeap(void);
+API void *__stdcall HeapAlloc(HANDLE, DWORD, SIZE_T);
+API int __stdcall HeapFree(HANDLE, DWORD, void *);
+#endif
 static volatile DWORD load_attempted;
 #endif
 extern void *copy_string(void *, const char *);
@@ -165,6 +170,9 @@ done:
     release(); return ok;
 }
 static int PreviewScheme(char *out) {
+#ifdef LPS_NATIVE_KEYS
+    if (entry_count != 20) return 0;
+#endif
     DWORD at = 0;
     out[at++] = '{';
     for (DWORD slot = 0; slot < 20; ++slot) {
@@ -176,31 +184,67 @@ static int PreviewScheme(char *out) {
         /* The native panel's fixed digit labels must remain truthful. Other
          * independent bindings live in the editor, not misleading panel rows. */
         DWORD vk = slot == 9 ? 0x30 : 0x31 + slot;
+#ifdef LPS_NATIVE_KEYS
+        if (slot >= 10) vk = 0x70 + slot - 10;
+        DWORD found = 0;
+        for (DWORD i = 0; i < entry_count; ++i) {
+#else
         if (slot < 10) for (DWORD i = 0; i < entry_count; ++i) {
+#endif
             if (entries[i].vk != vk || entries[i].mods != 8) continue;
+#ifdef LPS_NATIVE_KEYS
+            found = 1;
+#endif
             for (DWORD j = 0; j < entries[i].length; ++j) {
                 unsigned char value = blob[entries[i].offset + j];
+#ifdef LPS_NATIVE_KEYS
+                if (at + 3 >= 3950) return 0;
+#else
                 if (at + 3 >= 1950) return 0;
+#endif
                 if (value == '"' || value == '\\') out[at++] = '\\';
                 out[at++] = (char)value;
             }
             break;
         }
+#ifdef LPS_NATIVE_KEYS
+        if (!found) return 0;
+#endif
         out[at++] = '"';
     }
+#ifdef LPS_NATIVE_KEYS
+    static const char end[] = ",\"title\":\"LOCAL NATIVE20: ~+DIGITS / F1-F10\",\"key\":1}";
+#else
     static const char end[] = ",\"title\":\"LOCAL HOTKEYS: ~+DIGITS PREVIEW\",\"key\":1}";
+#endif
     for (DWORD i = 0; i < sizeof(end); ++i) out[at++] = end[i];
     return 1;
 }
 void *ReadLocalScheme(void *destination, const char *source) {
     (void)source;
     /* Incoming cloud text does not supply/override any local records. */
+#ifdef LPS_NATIVE_KEYS
+    if (!LoadPortable()) return copy_string(destination, failed_scheme);
+    HANDLE heap = GetProcessHeap();
+    char *preview = heap ? (char *)HeapAlloc(heap, 0, 4096) : 0;
+    if (!preview) return copy_string(destination, failed_scheme);
+    int ok = 0;
+    if (acquire()) {
+        ok = __atomic_load_n(&active, __ATOMIC_ACQUIRE) &&
+            loaded_generation == __atomic_load_n(&generation, __ATOMIC_ACQUIRE) && PreviewScheme(preview);
+        release();
+    }
+    void *result = copy_string(destination, ok ? preview : failed_scheme);
+    HeapFree(heap, 0, preview);
+    return result;
+#else
     if (!LoadPortable() || !acquire()) return copy_string(destination, failed_scheme);
     char preview[2046];
     int ok = __atomic_load_n(&active, __ATOMIC_ACQUIRE) &&
         loaded_generation == __atomic_load_n(&generation, __ATOMIC_ACQUIRE) && PreviewScheme(preview);
     release();
     return copy_string(destination, ok ? preview : failed_scheme);
+#endif
 }
 #else
 void *ReadLocalScheme(void *destination, const char *source) {

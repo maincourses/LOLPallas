@@ -32,6 +32,8 @@ def probe(path):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--build', type=Path, required=True)
+    p.add_argument('--candidate', default='TenPallas.portable.experimental.dll',
+                   choices=('TenPallas.portable.experimental.dll', 'TenPallas.nativekeys.experimental.dll'))
     p.add_argument('--child', type=Path)
     p.add_argument('--llvm', type=Path, default=Path(r'D:\LLVM\bin'))
     a = p.parse_args()
@@ -81,7 +83,7 @@ def main():
     assert results[0]['exit'] == 0 and results[0]['data']['old_and_new_imports_resolved'], results
     assert results[1]['exit'] == 0xC0000005, results
     assert results[2]['exit'] == 0 and results[2]['data']['old_and_new_imports_resolved'], results
-    candidate = (a.build.resolve()/'TenPallas.portable.experimental.dll').read_bytes()
+    candidate = (a.build.resolve()/a.candidate).read_bytes()
     candidate_opt = struct.unpack_from('<I',candidate,0x3C)[0]+24
     assert struct.unpack_from('<II',candidate,candidate_opt+112+12*8) == (0xFC000,0x6F8)
     report = dict(passed=True, own_fixture_only=True, checks=3, fixtures=results, work=str(work),

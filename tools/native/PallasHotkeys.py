@@ -116,7 +116,7 @@ def link_split(obj, base, code_rva, data_rva, externals):
                      for i, s in enumerate(coff.sections, 1) if s["name"] == ".pdata")
     return code, data, exports, pdata
 
-def patch(original, obj, existing_imports=None, preserve_iat=False):
+def patch(original, obj, existing_imports=None, preserve_iat=False, replace_keyboard=True):
     existing, _ = t.patch_copy(original)
     lib.verify_imports(original)
     pe = t.PE64(existing)
@@ -200,10 +200,12 @@ def patch(original, obj, existing_imports=None, preserve_iat=False):
     if not preserve_iat:
         struct.pack_into("<II", patched, optional + 112 + 12 * 8, 0, 0)
     hooks = []
-    for va, before, opcode, target in (
+    specs = [
         (lib.RECEIVE_CALL, b"\xE8" + struct.pack("<i", lib.COPY_STRING - lib.RECEIVE_CALL - 5), 0xE8, exports["ReadLocalScheme"]),
-        (KEYBOARD_VA, bytes.fromhex("48895c2408"), 0xE9, exports["CustomKeyboard"]),
-        (t.BODY_VA + 0x2C, b"\xE8" + struct.pack("<i", t.SENDER_VA - (t.BODY_VA + 0x2C) - 5), 0xE8, exports["SendNonempty"])):
+        (t.BODY_VA + 0x2C, b"\xE8" + struct.pack("<i", t.SENDER_VA - (t.BODY_VA + 0x2C) - 5), 0xE8, exports["SendNonempty"])]
+    if replace_keyboard:
+        specs.insert(1, (KEYBOARD_VA, bytes.fromhex("48895c2408"), 0xE9, exports["CustomKeyboard"]))
+    for va, before, opcode, target in specs:
         at = pe.offset(va, 5)
         if existing[at:at + 5] != before: raise ValueError("Unknown hook bytes.")
         after = bytes([opcode]) + struct.pack("<i", target - va - 5)

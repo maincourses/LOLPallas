@@ -1,4 +1,4 @@
-param([switch]$SelfTest, [switch]$InitializeOnly, [string]$PreviewPath, [switch]$Portable,
+param([switch]$SelfTest, [switch]$InitializeOnly, [string]$PreviewPath, [switch]$Portable, [switch]$NativeKeys,
     [switch]$Standalone, [string]$SourcePath, [string]$HostExecutable, [string]$HostExecutableHash)
 $ErrorActionPreference = 'Stop'
 trap {
@@ -12,6 +12,10 @@ trap {
 if (-not $Portable) { . (Join-Path $PSScriptRoot 'lib\EditorTools.ps1') }
 $script:BinaryVersion = 2
 if ($Portable) { . (Join-Path $PSScriptRoot 'lib\PortableTools.ps1'); $script:BinaryVersion = 3 }
+if ($NativeKeys) {
+    if (-not $Portable -or $Standalone) { throw 'Native-key control editor requires portable mode, not the earlier standalone host.' }
+    . (Join-Path $PSScriptRoot 'lib\NativeKeyTools.ps1')
+}
 $providedSourcePath = $SourcePath
 $script:SourcePath = Join-Path $PSScriptRoot 'messages.json'
 if ($providedSourcePath) { $script:SourcePath = [IO.Path]::GetFullPath($providedSourcePath) }
@@ -29,7 +33,10 @@ if ($Standalone) {
         if ($script:Settings -and (Test-PortableRoot $script:Settings.Root)) { $script:SelectedWeGame = $script:Settings.Root }
     }
 }
-if ($SelfTest) { $script:SourcePath = Join-Path $PSScriptRoot 'messages.example.json' }
+if ($SelfTest) {
+    $script:SourcePath = Join-Path $PSScriptRoot 'messages.example.json'
+    if ($NativeKeys) { $script:SourcePath = Join-Path $PSScriptRoot 'portable\messages.example.json' }
+}
 if (-not (Test-Path -LiteralPath $script:SourcePath)) {
     $legacy = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'PallasCustomShout\library20-v1.json'
     if (-not (Test-Path -LiteralPath $legacy -PathType Leaf)) { $legacy = Join-Path $PSScriptRoot 'scheme20.json' }
@@ -57,6 +64,11 @@ Add-Type -AssemblyName System.Drawing
 $script:Ui = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'lib\hotkeys-ui.zh-CN.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($Portable) { $script:Ui.title = $script:Ui.portableTitle; $script:Ui.applyNote = $script:Ui.portableApplyNote }
 if ($Standalone) { $script:Ui.title = $script:Ui.standaloneTitle; $script:Ui.applyNote = $script:Ui.standaloneApplyNote }
+if ($NativeKeys) {
+    Assert-NativeKeyScheme $script:Document.Compiled.Scheme
+    $script:Ui.title = $script:Ui.nativeKeysTitle; $script:Ui.subtitle = $script:Ui.nativeKeysSubtitle
+    $script:Ui.warning = $script:Ui.nativeKeysWarning; $script:Ui.applyNote = $script:Ui.nativeKeysNote
+}
 $script:Loading = $false; $script:SavedDraft = ''; $script:Dirty = $false; $script:Valid = $false
 $script:View = @{}
 $form = New-Object Windows.Forms.Form
@@ -110,6 +122,7 @@ foreach ($entry in @(@('index', 45, $true), @('binding', 160, $false), @('messag
     [void]$grid.Columns.Add($column)
 }
 $grid.Columns['message'].DefaultCellStyle.WrapMode = 'True'
+if ($NativeKeys) { $grid.Columns['binding'].ReadOnly = $true }
 $gridRow = 3; if ($Standalone) { $gridRow = 4 }
 $layout.Controls.Add($grid, 0, $gridRow)
 foreach ($row in ($gridRow + 1)..($gridRow + 2)) {
@@ -154,6 +167,7 @@ function Update-View {
     }
     try {
         $compiled = ConvertTo-HotkeyArtifacts ($draft | ConvertTo-Json -Depth 4) -FormatVersion $script:BinaryVersion
+        if ($NativeKeys) { Assert-NativeKeyScheme $compiled.Scheme }
         $script:Valid = $true
         $script:View.Summary.Text = ($script:Ui.usage -f $draft.count, $compiled.LibraryBytes.Length) + "`r`n" + $script:Ui.applyNote
         $script:View.Summary.ForeColor = [Drawing.Color]::DarkGreen
@@ -164,6 +178,7 @@ function Update-View {
     $script:View.Buttons.save.Enabled = $script:Valid; $script:View.Buttons.apply.Enabled = $script:Valid
     $script:View.Buttons.add.Enabled = $script:View.Grid.Rows.Count -lt 512
     $script:View.Buttons.remove.Enabled = $script:View.Grid.Rows.Count -gt 1
+    if ($NativeKeys) { foreach ($name in @('add','remove','capture')) { $script:View.Buttons[$name].Enabled = $false } }
 }
 function Set-Draft($Scheme) {
     $script:Loading = $true
@@ -209,7 +224,9 @@ function Invoke-HotkeyBackend([string]$Mode) {
     $start = New-Object Diagnostics.ProcessStartInfo
     $start.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $backend = 'Manage-Pallas-Hotkeys.ps1'; if ($Portable) { $backend = 'Manage-Pallas-Portable.ps1' }
+    if ($NativeKeys) { $backend = 'Manage-Pallas-NativeKeys.ps1' }
     $start.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $PSScriptRoot $backend) + '" -Mode ' + $Mode
+    if ($NativeKeys) { $start.Arguments += ' -SchemePath ' + (ConvertTo-PortableArgument $script:SourcePath) }
     $start.UseShellExecute = $false; $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
     $start.StandardOutputEncoding = New-Object Text.UTF8Encoding($false); $start.StandardErrorEncoding = $start.StandardOutputEncoding
@@ -347,6 +364,18 @@ if ($Standalone -and -not $SelfTest -and -not $script:SelectedWeGame) {
     try { Set-SelectedWeGame (Resolve-PortableRoot '' (Get-PortableDataRoot)) } catch { $script:View.WeGame.Text = $script:Ui.wegameNotSelected }
 }
 if ($SelfTest) {
+    if ($NativeKeys) {
+        if (-not $script:Valid -or $grid.Rows.Count -ne 20 -or $script:Dirty -or -not $grid.Columns['binding'].ReadOnly) { throw 'Native-key initial model invalid.' }
+        foreach ($name in @('add','remove','capture')) { if ($buttons[$name].Enabled) { throw 'Native-key controls must be disabled.' } }
+        $grid.Rows[0].Cells['message'].Value = 'x' * 51; Update-View
+        if ($script:Valid -or ([string]$grid.Rows[0].Cells['message'].Value).Length -ne 51) { throw 'Native-key overflow guard failed.' }
+        Set-Draft $script:Document.Compiled.Scheme
+        $grid.Rows[0].Cells['binding'].Value = 'Ctrl+Alt+Q'; Update-View
+        if ($script:Valid -or $buttons.apply.Enabled) { throw 'Native-key binding mismatch accepted.' }
+        if ((Get-ShoutFileHash $script:SourcePath) -ne $script:Document.Hash) { throw 'Native-key test changed source.' }
+        $script:Dirty = $false; $form.Dispose()
+        Write-Host 'PASS: native-key GUI guards, fixed twenty rows, disabled rebinding/add/delete, nontruncating text limit; no live writes.'; exit 0
+    }
     if ($PreviewPath) {
         $absolute = [IO.Path]::GetFullPath($PreviewPath)
         $buildPrefix = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'build')) + [IO.Path]::DirectorySeparatorChar

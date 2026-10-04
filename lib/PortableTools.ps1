@@ -287,7 +287,8 @@ function Apply-PortableMessages($Context, $Compiled) {
     }
 }
 
-function Upgrade-PortableComponent($Context, [byte[]]$Candidate) {
+function Upgrade-PortableComponent($Context, [byte[]]$Candidate,
+    [string]$Revision = 'input-loader-r1', [string]$KeyboardMode = 'independent') {
     Assert-ShoutStopped; Assert-PortableLoader $Context; $record = Read-PortableState $Context
     if ($record.candidate_dll_sha256 -ne $script:PortablePreviousHash -or
         (Get-ShoutByteHash $Candidate) -ne $script:PortableTargetHash) { throw 'Unsupported upgrade source/target.' }
@@ -303,7 +304,8 @@ function Upgrade-PortableComponent($Context, [byte[]]$Candidate) {
     $updated = $record | ConvertTo-Json -Depth 5 | ConvertFrom-Json
     $updated.candidate_dll_sha256 = $script:PortableTargetHash
     $updated.runtime_verified = $false; $updated.game_send_verified = $false
-    $updated | Add-Member -NotePropertyName repair_revision -NotePropertyValue 'input-loader-r1' -Force
+    $updated | Add-Member -NotePropertyName repair_revision -NotePropertyValue $Revision -Force
+    $updated | Add-Member -NotePropertyName keyboard_mode -NotePropertyValue $KeyboardMode -Force
     $updated | Add-Member -NotePropertyName upgraded_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force
     try {
         Write-PortableFile $Context $Candidate $Context.Dll $script:PortablePreviousHash $script:PortablePreviousHash
@@ -325,6 +327,6 @@ function Upgrade-PortableComponent($Context, [byte[]]$Candidate) {
         $Context.StateHash = $beforeState
         throw ('Upgrade failed; previous component/state restored, texts untouched: ' + $failure)
     }
-    Write-Host 'UPGRADED: loader/input repair; existing texts, bindings and original restore baseline retained.'
+    Write-Host ('COMPONENT UPDATED (' + $Revision + '): existing texts, bindings and original restore baseline retained.')
     return $updated
 }

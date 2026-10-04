@@ -23,14 +23,14 @@ def artifacts(scheme):
                    cloud_response_required=False, library_format=3)
     return raw, b'', canonical, metrics
 
-def patch(original, obj):
+def patch(original, obj, native_keys=False):
     pe = t.PE64(original)
     slot = pe.offset(BASE + 0xFC590, 8)
     hint = struct.unpack_from('<Q', original, slot)[0]
     at = pe.offset(BASE + hint + 2, 1)
     if original[at:original.index(0, at)] != b'SHGetFolderPathW':
         raise ValueError('Existing Shell32 import slot mismatch.')
-    return base.patch(original, obj, EXISTING_IMPORTS, preserve_iat=True)
+    return base.patch(original, obj, EXISTING_IMPORTS, preserve_iat=True, replace_keyboard=not native_keys)
 
 def delta(before, after):
     rows, at = [], 0
