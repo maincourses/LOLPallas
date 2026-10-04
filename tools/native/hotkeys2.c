@@ -43,6 +43,11 @@ static DWORD entry_count;
 static struct Entry { DWORD vk, mods, length, offset; } entries[MAX_ENTRIES];
 static unsigned char blob[CAPACITY + 1], pressed[256];
 static HANDLE foreground;
+#ifdef LPS_PORTABLE
+/* Event state is authoritative. An asynchronous query may return zero even
+ * when this component has already received the modifier-down event. */
+static unsigned char event_down[256], blocked[256];
+#endif
 
 static int acquire(void) { return !__atomic_exchange_n(&gate, 1, __ATOMIC_ACQUIRE); }
 static void release(void) { __atomic_store_n(&gate, 0, __ATOMIC_RELEASE); }
@@ -129,15 +134,16 @@ static int validate(DWORD length) {
 #ifdef LPS_PORTABLE
 static int LoadPortable(void) {
     DWORD ticket = __atomic_add_fetch(&generation, 1, __ATOMIC_ACQ_REL);
-    __atomic_store_n(&load_attempted, 1, __ATOMIC_RELEASE);
     __atomic_store_n(&active, 0, __ATOMIC_RELEASE);
     if (!acquire()) return 0;
+    __atomic_add_fetch(&load_attempted, 1, __ATOMIC_ACQ_REL);
     int ok = 0;
     DWORD count = 0, length = 0;
     WORD path[320];
     static const WORD suffix[] = L"\\LOLPallasPortable\\hotkeys.bin";
-    entry_count = 0; foreground = 0;
-    for (DWORD i = 0; i < 256; ++i) pressed[i] = 0;
+    /* Preserve observed held keys and primary latches across a bounded retry
+     * or scheme refresh; loading must not manufacture a new key press. */
+    entry_count = 0;
     path[0] = 0;
     /* Reuse the already-imported Shell32 function, not usernames/env strings. */
     if (SHGetFolderPathW(0, 0x1C, 0, 0, path) != 0) goto done;
@@ -154,13 +160,47 @@ static int LoadPortable(void) {
     ok = hash == u32(blob + 16) && validate(count);
 done:
     loaded_generation = ticket;
+    if (ok) __atomic_store_n(&load_attempted, 0, __ATOMIC_RELEASE);
     __atomic_store_n(&active, (DWORD)ok, __ATOMIC_RELEASE);
     release(); return ok;
+}
+static int PreviewScheme(char *out) {
+    DWORD at = 0;
+    out[at++] = '{';
+    for (DWORD slot = 0; slot < 20; ++slot) {
+        if (slot) out[at++] = ',';
+        out[at++] = '"';
+        if (slot >= 10) out[at++] = '1';
+        out[at++] = (char)('0' + slot % 10);
+        out[at++] = '"'; out[at++] = ':'; out[at++] = '"';
+        /* The native panel's fixed digit labels must remain truthful. Other
+         * independent bindings live in the editor, not misleading panel rows. */
+        DWORD vk = slot == 9 ? 0x30 : 0x31 + slot;
+        if (slot < 10) for (DWORD i = 0; i < entry_count; ++i) {
+            if (entries[i].vk != vk || entries[i].mods != 8) continue;
+            for (DWORD j = 0; j < entries[i].length; ++j) {
+                unsigned char value = blob[entries[i].offset + j];
+                if (at + 3 >= 1950) return 0;
+                if (value == '"' || value == '\\') out[at++] = '\\';
+                out[at++] = (char)value;
+            }
+            break;
+        }
+        out[at++] = '"';
+    }
+    static const char end[] = ",\"title\":\"LOCAL HOTKEYS: ~+DIGITS PREVIEW\",\"key\":1}";
+    for (DWORD i = 0; i < sizeof(end); ++i) out[at++] = end[i];
+    return 1;
 }
 void *ReadLocalScheme(void *destination, const char *source) {
     (void)source;
     /* Incoming cloud text does not supply/override any local records. */
-    return copy_string(destination, LoadPortable() ? empty_scheme : failed_scheme);
+    if (!LoadPortable() || !acquire()) return copy_string(destination, failed_scheme);
+    char preview[2046];
+    int ok = __atomic_load_n(&active, __ATOMIC_ACQUIRE) &&
+        loaded_generation == __atomic_load_n(&generation, __ATOMIC_ACQUIRE) && PreviewScheme(preview);
+    release();
+    return copy_string(destination, ok ? preview : failed_scheme);
 }
 #else
 void *ReadLocalScheme(void *destination, const char *source) {
@@ -194,6 +234,7 @@ done:
 }
 #endif
 
+#ifndef LPS_PORTABLE
 void CustomKeyboard(void *object, DWORD message, SIZE_T key, SIZE_T unused) {
     (void)object; (void)unused;
 #ifdef LPS_PORTABLE
@@ -239,5 +280,70 @@ void CustomKeyboard(void *object, DWORD message, SIZE_T key, SIZE_T unused) {
     /* Never hold the gate while calling an external/reentrant sender. */
     if (length) original_send(text);
 }
+#else
+static DWORD EventModifiers(void) {
+    DWORD mask = 0;
+    if (event_down[0x11] || event_down[0xA2] || event_down[0xA3]) mask |= 1;
+    if (event_down[0x12] || event_down[0xA4] || event_down[0xA5]) mask |= 2;
+    if (event_down[0x10] || event_down[0xA0] || event_down[0xA1]) mask |= 4;
+    if (event_down[0xC0]) mask |= 8;
+    return mask;
+}
+static void ResetEventState(void) {
+    for (DWORD i = 0; i < 256; ++i) {
+        blocked[i] |= event_down[i];
+        event_down[i] = 0; pressed[i] = 0;
+    }
+}
+static void UpdatePanel(void *object) {
+    unsigned char *controller = (unsigned char *)object;
+    DWORD panel_mask = controller[0x91] ? 8 : 1;
+    unsigned char held = (EventModifiers() & panel_mask) != 0;
+    if (held && !controller[0x92]) {
+        /* Same fixed statistics slot as the original callback. */
+        DWORD *count = (DWORD *)(controller + 0xC0); *count += 1;
+    }
+    controller[0x92] = held;
+}
+void CustomKeyboard(void *object, DWORD message, SIZE_T key, SIZE_T unused) {
+    (void)unused;
+    if (!object || key >= 256 || (message != 0x100 && message != 0x101 &&
+        message != 0x104 && message != 0x105) || !acquire()) return;
+    HANDLE current = GetForegroundWindow();
+    if (current != foreground || !current) {
+        foreground = current; ResetEventState();
+    }
+    if (message == 0x101 || message == 0x105) {
+        blocked[key] = 0; pressed[key] = 0; event_down[key] = 0;
+        UpdatePanel(object); release(); return;
+    }
+    if (!current || blocked[key] || pressed[key]) { UpdatePanel(object); release(); return; }
+    pressed[key] = 1; event_down[key] = 1; UpdatePanel(object);
+    if (!__atomic_load_n(&active, __ATOMIC_ACQUIRE) &&
+        __atomic_load_n(&load_attempted, __ATOMIC_ACQUIRE) < 3) {
+        /* Stop after three consecutive failed reads, only on fresh user key
+         * events. No timer, polling, synthetic input or autorepeat retry loop. */
+        release(); LoadPortable(); if (!acquire()) return;
+    }
+    if (!__atomic_load_n(&active, __ATOMIC_ACQUIRE) ||
+        loaded_generation != __atomic_load_n(&generation, __ATOMIC_ACQUIRE) ||
+        !event_down[key] || blocked[key]) { release(); return; }
+    /* Event-observed Win state plus conservative physical Win suppression.
+     * Async state is NEVER used to decide a Ctrl/Alt/Shift/~ match. */
+    if (event_down[0x5B] || event_down[0x5C] ||
+        GetAsyncKeyState(0x5B) < 0 || GetAsyncKeyState(0x5C) < 0) { release(); return; }
+    DWORD mods = EventModifiers();
+    char text[201]; DWORD length = 0;
+    for (DWORD i = 0; i < entry_count; ++i) {
+        if (entries[i].vk == key && entries[i].mods == mods) {
+            length = entries[i].length;
+            for (DWORD j = 0; j < length; ++j) text[j] = (char)blob[entries[i].offset + j];
+            text[length] = 0; break;
+        }
+    }
+    release();
+    if (length) original_send(text);
+}
+#endif
 
 void SendNonempty(const char *text) { if (text && *text) original_send(text); }

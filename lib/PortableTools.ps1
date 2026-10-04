@@ -1,13 +1,15 @@
 # Windows PowerShell 5.1; importing defines functions only.
 . (Join-Path $PSScriptRoot 'HotkeyTools.ps1')
-$script:PortableTargetHash = '6B8CCD673E96817095933BDAA170DC76D7995D27EC6CB41921F9E794A92F5AE3'
+$script:PortableTargetHash = '52776E6B2D105DF4CD0FF7EC8933E8170F7A404D1D6FD68288CA5C44AF0CC0AD'
+$script:PortablePreviousHash = '6B8CCD673E96817095933BDAA170DC76D7995D27EC6CB41921F9E794A92F5AE3'
 $script:PortableOriginalHash = '97BA57FD47A393A3A4BBFA684D0F03D10CF04344FBD99CB2D2E8626675BE9C94'
 $script:PortableV2Hash = '4AE8AB0793EEBCEA5E23C1B8931A6C0057393BBCF413A9AF323D91750D3EE143'
 $script:PortableLoaderHash = 'E17F8CE7CA6936A5984AF16BB2751F305B3F72F556D0C7D2AD31C2C9EE70D119'
 $script:PortableV2LoaderHash = '803870E3FDA683443471E835699B065293724DC7E0F3289D0093FC84C8E30935'
 $script:PortableDeltaHashes = @{
-    'original-to-portable.json' = '27A3B4235204C03C307FF97AD4E08D4C2D1453A901E0A708FD51266E1CE154E5'
-    'v2-to-portable.json' = '16E24F3BC93044322B659E4A84F6B9AC104FA16C36756319E1DA5A731BAEB2FB'
+    'original-to-portable.json' = '24DD397BBFD5824AF3B3D3A04741777F8E7BAC36A2715578C78D7BC8CE7FDDBA'
+    'v2-to-portable.json' = '3F28B6F6CB8C7438A4FAC3EC4FC34E9C223597CFADF0AF3BCB16157C8DB638D9'
+    'portable-v3-to-fixed.json' = '4F07C27AEEC14B59984C10AF478DA1E7A5DFC22DF06E4B881773C21AA44F4798'
 }
 
 function Get-PortableSid { return [Security.Principal.WindowsIdentity]::GetCurrent().User.Value }
@@ -108,6 +110,13 @@ function Assert-PortableLoader($Context) {
 function Assert-PortableBaseline($Context) {
     Assert-PortableLoader $Context
     $hash = Get-ShoutFileHash $Context.Dll
+    if ($hash -eq $script:PortablePreviousHash) {
+        $previous = Read-PortableState $Context
+        if ($previous.candidate_dll_sha256 -ne $hash -or $previous.status -ne 'installed-awaiting-game-test') { throw 'Previous portable install needs review.' }
+        Assert-ShoutHash $Context.Library $previous.installed_library_sha256
+        Assert-ShoutHash $Context.Source $previous.installed_source_sha256
+        return $hash
+    }
     if ($hash -eq $script:PortableOriginalHash -and $Context.LoaderHash -eq $script:PortableLoaderHash) {
         foreach ($path in @($Context.Dll,$Context.Loader)) {
             if ((Get-AuthenticodeSignature -LiteralPath $path).Status.ToString() -ne 'Valid') { throw 'Original component signature is not valid. Refusing installation.' }
@@ -167,7 +176,7 @@ function Backup-PortableFile([string]$Source, [string]$Destination, [string]$Has
 }
 function Save-PortableState($Context, $Record) {
     $current = Get-ShoutFileHash $Context.Dll
-    if ($current -notin @($script:PortableTargetHash,$Record.baseline_dll_sha256)) { throw 'Unknown DLL; state commit refused.' }
+    if ($current -notin @($script:PortableTargetHash,$script:PortablePreviousHash,$Record.baseline_dll_sha256)) { throw 'Unknown DLL; state commit refused.' }
     $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes(($Record | ConvertTo-Json -Depth 5))
     Write-PortableFile $Context $bytes $Context.State $Context.StateHash $current
     $Context.StateHash = Get-ShoutByteHash $bytes
@@ -178,7 +187,7 @@ function Read-PortableState($Context) {
     if ($record.experiment -ne 'portable-hotkeys-v3' -or $record.sid -ne $Context.Sid -or
         $record.wegame_root -ne $Context.Root -or $record.dll_path -ne $Context.Dll -or
         $record.library_path -ne $Context.Library -or $record.source_path -ne $Context.Source -or
-        $record.candidate_dll_sha256 -ne $script:PortableTargetHash -or
+        $record.candidate_dll_sha256 -notin @($script:PortableTargetHash,$script:PortablePreviousHash) -or
         $record.baseline_dll_sha256 -notin @($script:PortableOriginalHash,$script:PortableV2Hash) -or
         $record.loader_sha256 -ne $Context.LoaderHash -or $record.backup_id -notmatch '^[a-f0-9]{32}$' -or
         $record.installed_library_sha256 -notmatch '^[A-Fa-f0-9]{64}$' -or $record.installed_source_sha256 -notmatch '^[A-Fa-f0-9]{64}$') {
@@ -194,11 +203,11 @@ function Get-PortableSourceBytes($Compiled) {
 function Restore-PortableComponent($Context, $Record) {
     Assert-ShoutStopped; Assert-PortableLoader $Context
     $current = Get-ShoutFileHash $Context.Dll
-    if ($current -notin @($Record.baseline_dll_sha256,$script:PortableTargetHash)) { throw 'Component was updated/changed; restore refused. Backups retained.' }
+    if ($current -notin @($Record.baseline_dll_sha256,$Record.candidate_dll_sha256)) { throw 'Component was updated/changed; restore refused. Backups retained.' }
     Assert-ShoutHash $Context.State $Context.StateHash
     $backup = Join-Path $Context.Data ('backups\' + $Record.backup_id + '\TenPallas.before.dll')
     Assert-ShoutHash $backup $Record.baseline_dll_sha256
-    if ($current -eq $script:PortableTargetHash) {
+    if ($current -eq $Record.candidate_dll_sha256) {
         Write-PortableFile $Context ([IO.File]::ReadAllBytes($backup)) $Context.Dll $current $current
     }
     # All local texts and libraries are retained for recovery. Launcher never modified.
@@ -207,6 +216,7 @@ function Restore-PortableComponent($Context, $Record) {
 function Install-PortableComponent($Context, $Compiled, [byte[]]$Candidate) {
     Assert-ShoutStopped; $baseline = Assert-PortableBaseline $Context
     if ((Get-ShoutByteHash $Candidate) -ne $script:PortableTargetHash) { throw 'Candidate hash mismatch.' }
+    if ($baseline -eq $script:PortablePreviousHash) { return Upgrade-PortableComponent $Context $Candidate }
     if (Test-Path -LiteralPath $Context.State) {
         $previous = Read-PortableState $Context
         if ($previous.baseline_dll_sha256 -ne $baseline -or $previous.status -ne 'restored') { throw 'Existing install: use the editor Apply button for edits. Prepared/failed records need review.' }
@@ -215,6 +225,8 @@ function Install-PortableComponent($Context, $Compiled, [byte[]]$Candidate) {
         # Reinstall reuses the exact previous applied texts; do not replace them with package defaults.
         try {
             Write-PortableFile $Context $Candidate $Context.Dll $baseline $baseline
+            $previous.candidate_dll_sha256 = $script:PortableTargetHash
+            $previous.runtime_verified = $false; $previous.game_send_verified = $false
             $previous.status = 'installed-awaiting-game-test'; Save-PortableState $Context $previous
         } catch {
             $failure = $_.Exception.Message
@@ -251,6 +263,7 @@ function Install-PortableComponent($Context, $Compiled, [byte[]]$Candidate) {
 }
 function Apply-PortableMessages($Context, $Compiled) {
     Assert-ShoutStopped; Assert-PortableLoader $Context; $record = Read-PortableState $Context
+    if ($record.candidate_dll_sha256 -ne $script:PortableTargetHash) { throw 'Previous test component: use Install/Enable in the new EXE to upgrade first. All texts are retained.' }
     Assert-ShoutHash $Context.Dll $script:PortableTargetHash
     Assert-ShoutHash $Context.Library $record.installed_library_sha256; Assert-ShoutHash $Context.Source $record.installed_source_sha256
     $beforeLibrary = $record.installed_library_sha256; $beforeSource = $record.installed_source_sha256
@@ -272,4 +285,46 @@ function Apply-PortableMessages($Context, $Compiled) {
         if ($nowSource -ne $beforeSource) { Write-PortableFile $Context ([IO.File]::ReadAllBytes($savedSource)) $Context.Source $nowSource $script:PortableTargetHash }
         throw ('Apply failed; previous texts restored: ' + $failure)
     }
+}
+
+function Upgrade-PortableComponent($Context, [byte[]]$Candidate) {
+    Assert-ShoutStopped; Assert-PortableLoader $Context; $record = Read-PortableState $Context
+    if ($record.candidate_dll_sha256 -ne $script:PortablePreviousHash -or
+        (Get-ShoutByteHash $Candidate) -ne $script:PortableTargetHash) { throw 'Unsupported upgrade source/target.' }
+    Assert-ShoutHash $Context.Dll $script:PortablePreviousHash
+    Assert-ShoutHash $Context.Library $record.installed_library_sha256
+    Assert-ShoutHash $Context.Source $record.installed_source_sha256
+    $beforeState = $Context.StateHash
+    $backupRoot = Join-Path $Context.Data ('backups\upgrade-' + [guid]::NewGuid().ToString('N'))
+    [void](Assert-PortablePath $backupRoot); New-Item -ItemType Directory -Path $backupRoot | Out-Null
+    $savedDll = Join-Path $backupRoot 'TenPallas.previous.dll'; $savedState = Join-Path $backupRoot 'state.previous.json'
+    Backup-PortableFile $Context.Dll $savedDll $script:PortablePreviousHash
+    Backup-PortableFile $Context.State $savedState $beforeState
+    $updated = $record | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+    $updated.candidate_dll_sha256 = $script:PortableTargetHash
+    $updated.runtime_verified = $false; $updated.game_send_verified = $false
+    $updated | Add-Member -NotePropertyName repair_revision -NotePropertyValue 'input-loader-r1' -Force
+    $updated | Add-Member -NotePropertyName upgraded_at -NotePropertyValue ([DateTime]::UtcNow.ToString('o')) -Force
+    try {
+        Write-PortableFile $Context $Candidate $Context.Dll $script:PortablePreviousHash $script:PortablePreviousHash
+        Assert-ShoutHash $Context.Library $record.installed_library_sha256
+        Assert-ShoutHash $Context.Source $record.installed_source_sha256
+        Save-PortableState $Context $updated
+    } catch {
+        $failure = $_.Exception.Message; $nowDll = Get-ShoutFileHash $Context.Dll
+        $newStateHash = Get-ShoutByteHash ((New-Object Text.UTF8Encoding($false)).GetBytes(($updated | ConvertTo-Json -Depth 5)))
+        $nowState = Get-ShoutFileHash $Context.State
+        if ($nowDll -notin @($script:PortablePreviousHash,$script:PortableTargetHash) -or
+            $nowState -notin @($beforeState,$newStateHash)) { throw ('Concurrent change: upgrade rollback refused. Backups: ' + $backupRoot) }
+        if ($nowDll -eq $script:PortableTargetHash) {
+            Write-PortableFile $Context ([IO.File]::ReadAllBytes($savedDll)) $Context.Dll $nowDll $nowDll
+        }
+        if ($nowState -ne $beforeState) {
+            Write-PortableFile $Context ([IO.File]::ReadAllBytes($savedState)) $Context.State $nowState $script:PortablePreviousHash
+        }
+        $Context.StateHash = $beforeState
+        throw ('Upgrade failed; previous component/state restored, texts untouched: ' + $failure)
+    }
+    Write-Host 'UPGRADED: loader/input repair; existing texts, bindings and original restore baseline retained.'
+    return $updated
 }

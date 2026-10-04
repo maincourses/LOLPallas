@@ -30,7 +30,7 @@ def patch(original, obj):
     at = pe.offset(BASE + hint + 2, 1)
     if original[at:original.index(0, at)] != b'SHGetFolderPathW':
         raise ValueError('Existing Shell32 import slot mismatch.')
-    return base.patch(original, obj, EXISTING_IMPORTS)
+    return base.patch(original, obj, EXISTING_IMPORTS, preserve_iat=True)
 
 def delta(before, after):
     rows, at = [], 0
@@ -84,9 +84,13 @@ def main():
     if t.sha256(v2) != '4ae8ab0793eebcea5e23c1b8931a6c0057393bbcf413a9af323d91750d3ee143':
         raise ValueError('Known v2 source hash mismatch.')
     patch_hashes = {}
-    for name, before in (('original-to-portable.json', original), ('v2-to-portable.json', v2)):
+    previous = (root / 'build/portable-v3-c/TenPallas.portable.experimental.dll').read_bytes()
+    if t.sha256(previous) != '6b8ccd673e96817095933bdaa170dc76d7995d27ec6cb41921f9e794a92f5ae3':
+        raise ValueError('Known superseded portable source hash mismatch.')
+    for name, before in (('original-to-portable.json', original), ('v2-to-portable.json', v2),
+                         ('portable-v3-to-fixed.json', previous)):
         data = t.compact(delta(before, candidate)); t.write_new(out / name, data); patch_hashes[name] = t.sha256(data)
-    report = dict(experiment='portable-v3', candidate_dll_sha256=t.sha256(candidate),
+    report = dict(experiment='portable-v3-input-fix', candidate_dll_sha256=t.sha256(candidate),
         source_dll_sha256=t.sha256(original), metrics=metrics, native=native, patch_sha256=patch_hashes,
         installed=False, game_send_verified=False, unsigned_experiment=True,
         loader_exe_modified=False, local_user_path_hardcoded=False,

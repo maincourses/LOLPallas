@@ -1,5 +1,5 @@
 # Isolated fixture files only. No production WeGame/profile writes or DLL loads.
-param([string]$BuildDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'build\portable-v3-c'))
+param([string]$BuildDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'build\portable-v3-r2'))
 $ErrorActionPreference = 'Stop'
 $project = Split-Path -Parent $PSScriptRoot
 . (Join-Path $project 'Manage-Pallas-Portable.ps1') -FunctionsOnly
@@ -16,7 +16,8 @@ Check ($compiled.LibraryHash -eq (Get-ShoutFileHash (Join-Path $BuildDirectory '
 Check ([Text.Encoding]::ASCII.GetString($compiled.LibraryBytes,0,7) -ceq 'LPSKEY3') 'Version marker'
 Check ([BitConverter]::ToUInt32($compiled.LibraryBytes,16) -eq (Get-LibraryChecksum ([byte[]]$compiled.LibraryBytes[20..81]))) 'Payload checksum'
 foreach ($entry in @(@('original-to-portable.json','engine\assets\TenPallas.original.dll'),
-    @('v2-to-portable.json','build\hotkeys-v2\TenPallas.hotkeys.experimental.dll'))) {
+    @('v2-to-portable.json','build\hotkeys-v2\TenPallas.hotkeys.experimental.dll'),
+    @('portable-v3-to-fixed.json','build\portable-v3-c\TenPallas.portable.experimental.dll'))) {
     $reconstructed = Expand-PortableDelta ([IO.File]::ReadAllBytes((Join-Path $project $entry[1]))) (Join-Path $BuildDirectory $entry[0]) $script:PortableDeltaHashes[$entry[0]]
     Check ((Get-ShoutByteHash $reconstructed) -eq $script:PortableTargetHash) 'Exact reconstruction including shorter v2 target'
 }
@@ -93,6 +94,38 @@ Check ((Read-PortableState $context).status -eq 'restored') 'Restore state'
 $record = Install-PortableComponent $context $compiled $script:CandidateBytes
 Check ((Get-ShoutFileHash $context.Library) -eq $changed.LibraryHash) 'Reinstall cannot reset edits to package defaults'
 Check ((Get-ShoutFileHash $context.Loader) -eq $loaderBefore) 'Launcher unchanged across restore/reinstall'
+# Model the known superseded v3 with its own valid original restore baseline.
+$script:PortablePreviousHash = Get-ShoutByteHash ($utf8.GetBytes('fixture previous portable'))
+$old = Read-PortableState $context; $old.candidate_dll_sha256 = $script:PortablePreviousHash
+[IO.File]::WriteAllBytes($context.Dll,$utf8.GetBytes('fixture previous portable')); Save-PortableState $context $old
+Reject { Apply-PortableMessages $context $compiled }
+$upgradeLibrary = Get-ShoutFileHash $context.Library; $upgradeSource = Get-ShoutFileHash $context.Source
+$upgradeBaseline = $old.baseline_dll_sha256; $upgradeBackup = $old.backup_id
+$upgraded = Install-PortableComponent $context $compiled $script:CandidateBytes
+Check ((Get-ShoutFileHash $context.Dll) -eq $script:PortableTargetHash) 'Upgrade installs fixed component'
+Check ((Get-ShoutFileHash $context.Library) -eq $upgradeLibrary -and (Get-ShoutFileHash $context.Source) -eq $upgradeSource) 'Upgrade never replaces existing texts with defaults'
+Check ($upgraded.baseline_dll_sha256 -eq $upgradeBaseline -and $upgraded.backup_id -eq $upgradeBackup) 'Upgrade retains original restore baseline'
+Check ((Read-PortableState $context).repair_revision -eq 'input-loader-r1') 'Upgrade state readback'
+$oldStateBytes = [IO.File]::ReadAllBytes($context.State)
+$old = Read-PortableState $context; $old.candidate_dll_sha256 = $script:PortablePreviousHash
+[IO.File]::WriteAllBytes($context.Dll,$utf8.GetBytes('fixture previous portable')); Save-PortableState $context $old
+$script:FaultPath = $context.State
+$failedUpdate = $old | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+$failedUpdate.candidate_dll_sha256 = $script:PortableTargetHash
+# State failure needs to ignore the timestamp hash; intercept this path once.
+$script:FailUpgradeState = $true
+$realSaveState = ${function:Save-PortableState}
+function Save-PortableState($Context,$Record) {
+    if ($script:FailUpgradeState -and $Record.candidate_dll_sha256 -eq $script:PortableTargetHash) {
+        $script:FailUpgradeState = $false; throw 'Fixture upgrade state commit failure'
+    }
+    & $realSaveState $Context $Record
+}
+$script:FaultPath = $null
+Reject { Install-PortableComponent $context $compiled $script:CandidateBytes }
+Check ((Get-ShoutFileHash $context.Dll) -eq $script:PortablePreviousHash -and (Read-PortableState $context).candidate_dll_sha256 -eq $script:PortablePreviousHash) 'Failed upgrade restores previous component and state'
+Check ((Get-ShoutFileHash $context.Library) -eq $upgradeLibrary -and (Get-ShoutFileHash $context.Source) -eq $upgradeSource) 'Failed upgrade retains texts'
+[void](Install-PortableComponent $context $compiled $script:CandidateBytes)
 $script:FaultPath = $context.Source; $script:FaultHash = Get-ShoutByteHash (Get-PortableSourceBytes $compiled)
 Reject { Apply-PortableMessages $context $compiled }
 Check ((Get-ShoutFileHash $context.Library) -eq $changed.LibraryHash) 'Apply failure rolls back binary'

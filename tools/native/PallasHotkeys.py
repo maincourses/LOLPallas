@@ -116,7 +116,7 @@ def link_split(obj, base, code_rva, data_rva, externals):
                      for i, s in enumerate(coff.sections, 1) if s["name"] == ".pdata")
     return code, data, exports, pdata
 
-def patch(original, obj, existing_imports=None):
+def patch(original, obj, existing_imports=None, preserve_iat=False):
     existing, _ = t.patch_copy(original)
     lib.verify_imports(original)
     pe = t.PE64(existing)
@@ -193,9 +193,12 @@ def patch(original, obj, existing_imports=None):
     struct.pack_into("<II", patched, optional + 112 + 8, code_rva + import_offset, len(descriptors) + 40)
     struct.pack_into("<II", patched, optional + 112 + 3 * 8, code_rva + pdata_offset, len(records) * 12)
     struct.pack_into("<II", patched, optional + 112 + 4 * 8, new_cert, cert_size)
-    # A discontiguous new IAT cannot be described by the old single range.
-    # Windows resolves IATs from descriptors; clear optional IAT directory.
-    struct.pack_into("<II", patched, optional + 112 + 12 * 8, 0, 0)
+    # A moved import descriptor table with no IAT directory makes the Windows
+    # loader's fallback select the wrong section for writable old import slots.
+    # Keep the old directory: new slots already reside in a separate RW section.
+    # False exists ONLY to reproduce the pinned, superseded v2 experiment.
+    if not preserve_iat:
+        struct.pack_into("<II", patched, optional + 112 + 12 * 8, 0, 0)
     hooks = []
     for va, before, opcode, target in (
         (lib.RECEIVE_CALL, b"\xE8" + struct.pack("<i", lib.COPY_STRING - lib.RECEIVE_CALL - 5), 0xE8, exports["ReadLocalScheme"]),
@@ -212,7 +215,8 @@ def patch(original, obj, existing_imports=None):
     return bytes(patched), dict(sections=sections, entry_points={k: hex(exports[k]) for k in required},
         hooks=hooks, added_unwind_records=len(new_pdata) // 12, unwind_record_count=len(records),
         added_public_imports=list(extra_names), certificate_file_offset=new_cert,
-        iat_offset=iat_offset, code_rva=code_rva, data_rva=data_rva)
+        iat_offset=iat_offset, code_rva=code_rva, data_rva=data_rva,
+        **({"original_iat_directory_preserved": True} if preserve_iat else {}))
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)

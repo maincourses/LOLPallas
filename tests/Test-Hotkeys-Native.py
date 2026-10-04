@@ -89,6 +89,11 @@ class Offline(unittest.TestCase):
         for s in after.sections:
             flags = struct.unpack_from("<I", candidate, s['header'] + 36)[0]
             self.assertFalse(flags & 0x20000000 and flags & 0x80000000, "No RWX sections")
+        if args.portable:
+            old_header = struct.unpack_from('<I', original, 0x3C)[0] + 24
+            self.assertEqual(candidate[header + 112 + 12 * 8:header + 112 + 13 * 8],
+                             original[old_header + 112 + 12 * 8:old_header + 112 + 13 * 8])
+            self.assertTrue(manifest['native']['original_iat_directory_preserved'])
     def test_only_pinned_hooks_change_original_code(self):
         baseline, _ = m.t.patch_copy(original); s = m.t.PE64(baseline).sections[0]; expected = set()
         for hook in manifest["native"]["hooks"]:
@@ -132,6 +137,8 @@ def native(real_io=False):
     base = k.VirtualAlloc(None, 0x50000, 0x3000, 4)
     if not base: raise c.WinError(c.get_last_error())
     callbacks, errors, state = [], [], dict(sent=[], copied=None, opens=0, mods=0, win=False, hwnd=1234, folder=r'C:\Users\Sample\AppData\Local')
+    controller = c.create_string_buffer(256)
+    c.c_ubyte.from_address(c.addressof(controller) + 0x91).value = 1
     def wrap(kind, fn):
         def safe(*params):
             try: return fn(*params)
@@ -162,7 +169,7 @@ def native(real_io=False):
         '__imp_ReadFile': wrap(WIN(c.c_int, c.c_void_p, c.c_void_p, c.c_uint32, c.c_void_p, c.c_void_p), read),
         '__imp_CloseHandle': wrap(WIN(c.c_int, c.c_void_p), close),
         '__imp_GetAsyncKeyState': wrap(WIN(c.c_short, c.c_int), lambda vk: -32768 if
-            (state['win'] if vk in (0x5B, 0x5C) else state['mods'] & {0x11:1, 0x12:2, 0x10:4, 0xC0:8}[vk]) else 0),
+            (state['win'] if vk in (0x5B, 0x5C) else (0 if args.portable else state['mods'] & {0x11:1, 0x12:2, 0x10:4, 0xC0:8}[vk])) else 0),
         '__imp_GetForegroundWindow': wrap(WIN(c.c_void_p), lambda: state['hwnd'])}
     if args.portable:
         def folder(hwnd, csidl, token, flags, output):
@@ -195,8 +202,24 @@ def native(real_io=False):
         state.update(flags)
         if source is None: source = b'Cloud text ignored' if args.portable else f'{{"_lps_keys_v2":"{len(raw):08X}:{m.lib.fnv1a(raw):08X}","key":1}}'.encode()
         text = c.create_string_buffer(source); assert load(0x2222, c.addressof(text)) == 0x2222
+        if args.portable:
+            # Independent test cases start with every key released. Production
+            # reloads deliberately retain latches; tested separately below.
+            for name in ('event_down', 'pressed', 'blocked'): c.memset(exports[name], 0, 256)
+            c.c_uint64.from_address(exports['foreground']).value = 0
+            c.c_ubyte.from_address(c.addressof(controller) + 0x92).value = 0
+            state['event_mods'] = 0
         return b'LOAD FAILED' not in state['copied']
-    def event(vk, mods, message=0x100): state['mods'] = mods; key(None, message, vk, 0)
+    def direct(vk, message): key(c.addressof(controller) if args.portable else None, message, vk, 0)
+    def event(vk, mods, message=0x100):
+        state['mods'] = mods
+        if args.portable:
+            before = state.get('event_mods', 0)
+            for bit, modifier in ((1, 0x11), (2, 0x12), (4, 0x10), (8, 0xC0)):
+                if before & bit and not mods & bit: direct(modifier, 0x101)
+                elif mods & bit and not before & bit: direct(modifier, 0x100)
+            state['event_mods'] = mods
+        direct(vk, message)
     try:
         raw = (args.build / binary_name).read_bytes(); check(run(raw))
         event(0x31, 8); check(state['sent'] == [b'Message one'])
@@ -210,7 +233,12 @@ def native(real_io=False):
         event(0x71, 5, 0x101); event(0x71, 0); event(0x71, 5); check(len(state['sent']) == 4)
         event(0x71, 5, 0x101); event(0x71, 5); check(len(state['sent']) == 5)
         state['hwnd'] = None; event(0x51, 3); check(len(state['sent']) == 5)
-        state['hwnd'] = 9876; event(0x51, 3); check(len(state['sent']) == 6)
+        state['hwnd'] = 9876
+        if args.portable:
+            event(0x51, 3); check(len(state['sent']) == 5) # no held-key focus replay
+            event(0x51, 0, 0x101); event(0x51, 3)
+        else: event(0x51, 3)
+        check(len(state['sent']) == 6)
         event(256, 8); event(0x31, 8, 0x102); check(len(state['sent']) == 6)
         state['win'] = True; event(0x71, 5); check(len(state['sent']) == 6)
         state['win'] = False
@@ -265,10 +293,48 @@ def native(real_io=False):
                 check(run(raw)); c.c_uint32.from_address(exports['load_attempted']).value = 0
                 c.c_uint32.from_address(exports['active']).value = 0; state.update(sent=[], opens=0, mods=8)
                 event(0x31, 8); check(state['sent'] == [b'Message one'] and state['opens'] == 1)
+                # Original native panel gate and held-modifier reuse, even when
+                # all async Ctrl/Alt/Shift/~ queries in this fixture return zero.
+                check(run(raw)); direct(0xC0, 0x100)
+                check(c.c_ubyte.from_address(c.addressof(controller)+0x92).value == 1)
+                direct(0x31, 0x100); check(state['sent'] == [b'Message one'])
+                direct(0x31, 0x101); direct(0x31, 0x100); check(len(state['sent']) == 2)
+                direct(0xC0, 0x101)
+                check(c.c_ubyte.from_address(c.addressof(controller)+0x92).value == 0)
+                direct(0x31, 0x101); direct(0x31, 0x100); check(len(state['sent']) == 2)
+                # Reload must not unlatch a held primary and replay autorepeat.
+                check(run(raw)); event(0x31,8)
+                cloud = c.create_string_buffer(b'{}'); load(0x2222,c.addressof(cloud))
+                direct(0x31,0x100); check(len(state['sent']) == 1)
+                direct(0x31,0x101); direct(0x31,0x100); check(len(state['sent']) == 2)
+                # Bounded recovery after a missing-file first attempt; no polling.
+                check(not run(raw,missing=True)); state['missing'] = False
+                event(0x31,8); check(state['sent'] == [b'Message one'])
+                check(not run(raw,missing=True))
+                for unused in range(8): event(0x31,8); event(0x31,8,0x101)
+                check(not state['sent'])
+                # Left/right modifiers and system messages.
+                check(run(raw)); direct(0xA2,0x100); direct(0xA3,0x100); direct(0xA4,0x104)
+                direct(0xA2,0x101); direct(0x51,0x104); check(state['sent'] == [b'Message two'])
+                direct(0x51,0x105); direct(0xA3,0x101); direct(0x51,0x104); check(len(state['sent']) == 1)
+                # Win event state must suppress even when physical querying is zero.
+                check(run(raw)); direct(0x5B,0x100); direct(0xC0,0x100); direct(0x31,0x100)
+                check(not state['sent']); direct(0x31,0x101); direct(0x5B,0x101); direct(0x31,0x100)
+                check(state['sent'] == [b'Message one'])
+                # Native digit previews map by binding, not row order; escaping
+                # and worst-case text fit the fixed preview buffer without cuts.
+                preview_test=dict(version=2,title='Preview',count=10)
+                for i in range(10):
+                    preview_test[str(i)]='\u4e2d'*50
+                    preview_test['bind'+str(i)]='~+'+str((i+1)%10)
+                preview_raw,_,_,_=m.artifacts(preview_test); check(run(preview_raw))
+                check(json.loads(state['copied'])['9'] == '\u4e2d'*50 and len(state['copied']) < 2046)
+                preview_test['0']='a"\\<> '; preview_raw,_,_,_=m.artifacts(preview_test)
+                check(run(preview_raw)); check(json.loads(state['copied'])['0'] == 'a"\\<> ')
             check(run(raw)); c.c_uint32.from_address(exports['gate']).value = 1
             event(0x31, 8); check(not state['sent'])
             check(not run(raw)); c.c_uint32.from_address(exports['gate']).value = 0
-            event(0x31, 8); check(not state['sent'])
+            event(0x31, 8); check(state['sent'] == [b'Message one'] if args.portable else not state['sent'])
             check(run(raw))
             for mask in range(1, 16):
                 label = '+'.join([name for name, bit in m.MODS.items() if mask & bit] + ['Q'])

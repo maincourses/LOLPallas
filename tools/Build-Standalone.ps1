@@ -1,5 +1,5 @@
 # Build a single unsigned Windows EXE. Development-only; never installs anything.
-param([string]$BuildDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'build\portable-v3-c'))
+param([string]$BuildDirectory = (Join-Path (Split-Path -Parent $PSScriptRoot) 'build\portable-v3-r2'))
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 . (Join-Path $root 'lib\PortableTools.ps1')
@@ -8,7 +8,9 @@ $csc = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path -LiteralPath $csc)) { throw 'The development machine needs the .NET Framework x64 compiler.' }
 $native = Get-Content -LiteralPath (Join-Path $BuildDirectory 'validation.portable.json') -Raw -Encoding UTF8 | ConvertFrom-Json
 if ($native.candidate_dll_sha256 -ne $script:PortableTargetHash -or -not $native.unit_tests_passed -or
-    -not $native.native.passed -or $native.native.cases -lt 135 -or -not $native.native_file_io.passed -or $native.native_file_io.cases -lt 16) { throw 'Pinned v3 offline validation required.' }
+    -not $native.native.passed -or $native.native.cases -lt 159 -or -not $native.native_file_io.passed -or $native.native_file_io.cases -lt 17) { throw 'Pinned repaired v3 offline validation required.' }
+$loader = Get-Content -LiteralPath (Join-Path $BuildDirectory 'validation.loader.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+if (-not $loader.passed -or -not $loader.own_fixture_only -or $loader.candidate_dll_sha256 -ne $script:PortableTargetHash) { throw 'Own normal Windows loader validation required.' }
 foreach ($test in @('tests\Test-Standalone.ps1','tests\Test-Portable.ps1')) {
     & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root $test)
     if ($LASTEXITCODE) { throw ('Test failed: ' + $test) }
@@ -26,7 +28,7 @@ $entries = [ordered]@{
     'README.md' = (Join-Path $root 'docs\single-exe.md')
 }
 foreach ($name in @('HotkeyTools.ps1','LibraryTools.ps1','ShoutTools.ps1','PortableTools.ps1','StandaloneTools.ps1','hotkeys-ui.zh-CN.json')) { $entries['lib/' + $name] = Join-Path $root ('lib\' + $name) }
-foreach ($name in @('original-to-portable.json','v2-to-portable.json')) {
+foreach ($name in @('original-to-portable.json','v2-to-portable.json','portable-v3-to-fixed.json')) {
     Assert-ShoutHash (Join-Path $BuildDirectory $name) $script:PortableDeltaHashes[$name]
     $entries['patches/' + $name] = Join-Path $BuildDirectory $name
 }
@@ -73,11 +75,12 @@ $result = Get-Content -LiteralPath $output -Raw -Encoding UTF8 | ConvertFrom-Jso
 if (-not $result.passed -or $result.checks -ne 15 -or -not $result.no_live_install_or_game_sends) { throw 'Unexpected EXE self-test result.' }
 if ((Get-AuthenticodeSignature -LiteralPath $exe).Status.ToString() -ne 'NotSigned') { throw 'Unexpected launcher signature status.' }
 $dist = Join-Path $root 'dist'; New-Item -ItemType Directory -Path $dist -Force | Out-Null
-$destination = Join-Path $dist ('LOLPallas-Test-' + $stamp + '.exe')
+$destination = Join-Path $dist ('LOLPallas-Fixed-Test-' + $stamp + '.exe')
 [IO.File]::Copy($exe,$destination,$false); Assert-ShoutHash $destination (Get-ShoutFileHash $exe)
 $report = [ordered]@{ artifact = $destination; sha256 = Get-ShoutFileHash $destination; bytes = (Get-Item -LiteralPath $destination).Length
     exe_signature = 'NotSigned'; game_send_verified = $false; proprietary_components_loaded = $false; live_install_changed = $false
-    payload_files = 13; personal_messages_included = $false; native_candidate_unchanged = $script:PortableTargetHash
+    payload_files = 14; personal_messages_included = $false; native_candidate_sha256 = $script:PortableTargetHash
+    own_windows_loader_tests = $loader; native_input_cases = $native.native.cases
     exe_self_tests = $result; build_work = $work }
 [IO.File]::WriteAllText((Join-Path $work 'build-report.json'),($report | ConvertTo-Json -Depth 5),(New-Object Text.UTF8Encoding($false)))
 Write-Host ('EXE VERIFIED: ' + $destination)
