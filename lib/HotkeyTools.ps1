@@ -33,7 +33,7 @@ function Get-HotkeyBinding([string]$Text) {
     return [pscustomobject]@{ VK = [int]$vk; Modifiers = [int]$mask; Label = ($labels -join '+') }
 }
 
-function ConvertTo-HotkeyArtifacts([string]$Text) {
+function ConvertTo-HotkeyArtifacts([string]$Text, [ValidateSet(2,3)][int]$FormatVersion = 2) {
     if ($Text.Length -gt 262144) { throw 'Source JSON is unexpectedly large.' }
     $jsonString = '"(?:[^"\\\x00-\x1f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*"'
     $jsonName = '"(?<name>(?:[^"\\\x00-\x1f]|\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4}))*)"'
@@ -76,7 +76,8 @@ function ConvertTo-HotkeyArtifacts([string]$Text) {
     $stream = New-Object IO.MemoryStream
     $writer = New-Object IO.BinaryWriter($stream, $utf8, $true)
     try {
-        $writer.Write([byte[]]@(76,80,83,75,69,89,50,0)); $writer.Write([uint32]0); $writer.Write([uint32]$scheme.count)
+        $writer.Write([byte[]]@(76,80,83,75,69,89,(48 + $FormatVersion),0)); $writer.Write([uint32]0); $writer.Write([uint32]$scheme.count)
+        if ($FormatVersion -eq 3) { $writer.Write([uint32]0) }
         foreach ($i in 0..($scheme.count - 1)) {
             $name = 'bind' + $i
             if ($scheme.$name -isnot [string]) { throw ('Hotkey must be text: ' + $name) }
@@ -90,6 +91,10 @@ function ConvertTo-HotkeyArtifacts([string]$Text) {
         if ($stream.Length -gt 65536) { throw ('Library uses ' + $stream.Length + ' / 65536 bytes. Nothing truncated.') }
         [void]$stream.Seek(8, [IO.SeekOrigin]::Begin); $writer.Write([uint32]$stream.Length); $writer.Flush()
         $data = $stream.ToArray()
+        if ($FormatVersion -eq 3) {
+            $checksum = Get-LibraryChecksum ([byte[]]$data[20..($data.Length - 1)])
+            [Array]::Copy([BitConverter]::GetBytes([uint32]$checksum), 0, $data, 16, 4)
+        }
     } finally { $writer.Dispose(); $stream.Dispose() }
     $token = '{0:X8}:{1:X8}' -f $data.Length, (Get-LibraryChecksum $data)
     $preview = [ordered]@{ _lps_keys_v2 = $token }
@@ -104,19 +109,19 @@ function ConvertTo-HotkeyArtifacts([string]$Text) {
         BootstrapBytes = $short.Length; Token = $token }
 }
 
-function Read-HotkeyDocument([string]$Path) {
+function Read-HotkeyDocument([string]$Path, [ValidateSet(2,3)][int]$FormatVersion = 2) {
     $before = Get-ShoutFileHash $Path
     if (-not $before) { throw ('Missing source: ' + $Path) }
-    $compiled = ConvertTo-HotkeyArtifacts (Get-Content -LiteralPath $Path -Raw -Encoding UTF8)
+    $compiled = ConvertTo-HotkeyArtifacts (Get-Content -LiteralPath $Path -Raw -Encoding UTF8) -FormatVersion $FormatVersion
     Assert-ShoutHash $Path $before
     return [pscustomobject]@{ Hash = $before; Compiled = $compiled }
 }
-function Save-HotkeyDocument($Scheme, [string]$Path, $ExpectedHash) {
-    $compiled = ConvertTo-HotkeyArtifacts ($Scheme | ConvertTo-Json -Depth 4)
+function Save-HotkeyDocument($Scheme, [string]$Path, $ExpectedHash, [ValidateSet(2,3)][int]$FormatVersion = 2) {
+    $compiled = ConvertTo-HotkeyArtifacts ($Scheme | ConvertTo-Json -Depth 4) -FormatVersion $FormatVersion
     if ((Get-ShoutFileHash $Path) -ne $ExpectedHash) { throw 'Source changed externally. Reload before saving.' }
     if (Test-Path -LiteralPath $Path) {
         if (-not $ExpectedHash) { throw 'Occupied source path.' }
-        $previous = Read-HotkeyDocument $Path
+        $previous = Read-HotkeyDocument $Path -FormatVersion $FormatVersion
         if ($previous.Compiled.LibraryHash -eq $compiled.LibraryHash -and $previous.Compiled.Scheme.title -eq $compiled.Scheme.title) {
             return [pscustomobject]@{ Hash = $ExpectedHash; Compiled = $compiled; Backup = $null }
         }

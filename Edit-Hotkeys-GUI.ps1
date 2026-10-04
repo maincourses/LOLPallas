@@ -1,4 +1,4 @@
-param([switch]$SelfTest, [switch]$InitializeOnly, [string]$PreviewPath)
+param([switch]$SelfTest, [switch]$InitializeOnly, [string]$PreviewPath, [switch]$Portable)
 $ErrorActionPreference = 'Stop'
 trap {
     if (-not $SelfTest -and -not $InitializeOnly) {
@@ -8,25 +8,37 @@ trap {
     exit 1
 }
 . (Join-Path $PSScriptRoot 'lib\HotkeyTools.ps1')
-. (Join-Path $PSScriptRoot 'lib\EditorTools.ps1')
+if (-not $Portable) { . (Join-Path $PSScriptRoot 'lib\EditorTools.ps1') }
+$script:BinaryVersion = 2
+if ($Portable) { . (Join-Path $PSScriptRoot 'lib\PortableTools.ps1'); $script:BinaryVersion = 3 }
 $script:SourcePath = Join-Path $PSScriptRoot 'messages.json'
 if ($SelfTest) { $script:SourcePath = Join-Path $PSScriptRoot 'messages.example.json' }
 if (-not (Test-Path -LiteralPath $script:SourcePath)) {
-    $legacy = 'C:\Users\zly\AppData\Local\PallasCustomShout\library20-v1.json'
+    $legacy = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'PallasCustomShout\library20-v1.json'
     if (-not (Test-Path -LiteralPath $legacy -PathType Leaf)) { $legacy = Join-Path $PSScriptRoot 'scheme20.json' }
-    if (Test-Path -LiteralPath $legacy -PathType Leaf) {
+    if ($Portable) {
+        $applied = Join-Path (Get-PortableDataRoot) 'applied-messages.json'
+        $statePath = Join-Path (Get-PortableDataRoot) 'state.json'
+        if ((Test-Path -LiteralPath $statePath -PathType Leaf) -and (Test-Path -LiteralPath $applied -PathType Leaf)) {
+            $state = Get-Content -LiteralPath $statePath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($state.experiment -ne 'portable-hotkeys-v3' -or $state.sid -ne (Get-PortableSid) -or $state.source_path -ne $applied) { throw 'Unrecognized installed source record.' }
+            Assert-ShoutHash $applied $state.installed_source_sha256
+            $scheme = (Read-HotkeyDocument $applied -FormatVersion 3).Compiled.Scheme
+        } else { $scheme = (Read-HotkeyDocument (Join-Path $PSScriptRoot 'messages.example.json') -FormatVersion 3).Compiled.Scheme }
+    } elseif (Test-Path -LiteralPath $legacy -PathType Leaf) {
         $before = Get-ShoutFileHash $legacy
         $scheme = ConvertFrom-LegacyHotkeys (Get-Content -LiteralPath $legacy -Raw -Encoding UTF8)
         Assert-ShoutHash $legacy $before
     } else { $scheme = (Read-HotkeyDocument (Join-Path $PSScriptRoot 'messages.example.json')).Compiled.Scheme }
-    [void](Save-HotkeyDocument $scheme $script:SourcePath $null)
+    [void](Save-HotkeyDocument $scheme $script:SourcePath $null -FormatVersion $script:BinaryVersion)
 }
-$script:Document = Read-HotkeyDocument $script:SourcePath
+$script:Document = Read-HotkeyDocument $script:SourcePath -FormatVersion $script:BinaryVersion
 if ($InitializeOnly) { Write-Host ('Source ready: ' + $script:SourcePath); exit 0 }
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [Windows.Forms.Application]::EnableVisualStyles()
 $script:Ui = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'lib\hotkeys-ui.zh-CN.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($Portable) { $script:Ui.title = $script:Ui.portableTitle; $script:Ui.applyNote = $script:Ui.portableApplyNote }
 $script:Loading = $false; $script:SavedDraft = ''; $script:Dirty = $false; $script:Valid = $false
 $script:View = @{}
 $form = New-Object Windows.Forms.Form
@@ -96,7 +108,7 @@ function Update-View {
         if ($size -gt 50) { $row.Cells['length'].Style.ForeColor = [Drawing.Color]::Firebrick }
     }
     try {
-        $compiled = ConvertTo-HotkeyArtifacts ($draft | ConvertTo-Json -Depth 4)
+        $compiled = ConvertTo-HotkeyArtifacts ($draft | ConvertTo-Json -Depth 4) -FormatVersion $script:BinaryVersion
         $script:Valid = $true
         $script:View.Summary.Text = ($script:Ui.usage -f $draft.count, $compiled.LibraryBytes.Length) + "`r`n" + $script:Ui.applyNote
         $script:View.Summary.ForeColor = [Drawing.Color]::DarkGreen
@@ -147,7 +159,8 @@ function Confirm-Discard {
 function Invoke-HotkeyBackend([string]$Mode) {
     $start = New-Object Diagnostics.ProcessStartInfo
     $start.FileName = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $start.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $PSScriptRoot 'Manage-Pallas-Hotkeys.ps1') + '" -Mode ' + $Mode
+    $backend = 'Manage-Pallas-Hotkeys.ps1'; if ($Portable) { $backend = 'Manage-Pallas-Portable.ps1' }
+    $start.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $PSScriptRoot $backend) + '" -Mode ' + $Mode
     $start.UseShellExecute = $false; $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true; $start.RedirectStandardError = $true
     $start.StandardOutputEncoding = New-Object Text.UTF8Encoding($false); $start.StandardErrorEncoding = $start.StandardOutputEncoding
@@ -161,7 +174,7 @@ function Invoke-HotkeyBackend([string]$Mode) {
 }
 function Save-Draft {
     [void]$script:View.Grid.EndEdit(); Update-View
-    $saved = Save-HotkeyDocument (Get-Draft) $script:SourcePath $script:Document.Hash
+    $saved = Save-HotkeyDocument (Get-Draft) $script:SourcePath $script:Document.Hash -FormatVersion $script:BinaryVersion
     $script:Document = [pscustomobject]@{ Hash = $saved.Hash; Compiled = $saved.Compiled }
     Set-Draft $saved.Compiled.Scheme
 }
@@ -202,7 +215,7 @@ foreach ($button in $buttons.Values) { $button.Add_Click({ param($sender, $event
                 }
             }
             'capture' { Capture-Binding }
-            'reload' { if (Confirm-Discard) { $script:Document = Read-HotkeyDocument $script:SourcePath; Set-Draft $script:Document.Compiled.Scheme } }
+            'reload' { if (Confirm-Discard) { $script:Document = Read-HotkeyDocument $script:SourcePath -FormatVersion $script:BinaryVersion; Set-Draft $script:Document.Compiled.Scheme } }
             'save' { Save-Draft; $script:View.Summary.Text = $script:Ui.saved }
             'apply' { Save-Draft; [void](Invoke-HotkeyBackend 'Apply'); $script:View.Summary.Text = $script:Ui.applied }
             'status' { [void][Windows.Forms.MessageBox]::Show((Invoke-HotkeyBackend 'Status'), $script:Ui.title) }
@@ -225,12 +238,13 @@ if ($SelfTest) {
         finally { $bitmap.Dispose(); $layout.Dock = 'Fill'; $form.Controls.Add($layout) }
     }
     $checks = 0
-    if (-not $script:Valid -or $grid.Rows.Count -ne 3 -or $script:Dirty) { throw 'Initial model invalid' }; $checks++
+    $initialCount = $script:Document.Compiled.Scheme.count
+    if (-not $script:Valid -or $grid.Rows.Count -ne $initialCount -or $script:Dirty) { throw 'Initial model invalid' }; $checks++
     Add-Message
-    if (-not $script:Valid -or $grid.Rows.Count -ne 4 -or -not $script:Dirty) { throw 'Add row failed' }; $checks++
-    $grid.Rows[3].Cells['binding'].Value = 'Ctrl+Alt+Q'; Update-View
+    if (-not $script:Valid -or $grid.Rows.Count -ne ($initialCount + 1) -or -not $script:Dirty) { throw 'Add row failed' }; $checks++
+    $grid.Rows[$initialCount].Cells['binding'].Value = $grid.Rows[0].Cells['binding'].Value; Update-View
     if ($script:Valid -or $buttons.save.Enabled -or $buttons.apply.Enabled) { throw 'Duplicate binding allowed' }; $checks++
-    $grid.Rows.RemoveAt(3); Update-View
+    $grid.Rows.RemoveAt($initialCount); Update-View
     if (-not $script:Valid) { throw 'Delete row failed' }; $checks++
     $grid.Rows[0].Cells['message'].Value = 'x' * 51; Update-View
     if ($script:Valid -or ([string]$grid.Rows[0].Cells['message'].Value).Length -ne 51) { throw 'Overflow truncated/accepted' }; $checks++

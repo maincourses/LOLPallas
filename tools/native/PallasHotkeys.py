@@ -116,7 +116,7 @@ def link_split(obj, base, code_rva, data_rva, externals):
                      for i, s in enumerate(coff.sections, 1) if s["name"] == ".pdata")
     return code, data, exports, pdata
 
-def patch(original, obj):
+def patch(original, obj, existing_imports=None):
     existing, _ = t.patch_copy(original)
     lib.verify_imports(original)
     pe = t.PE64(existing)
@@ -132,6 +132,7 @@ def patch(original, obj):
     iat_offset = lib.align(writable_size, 8)
     extra_names = ("GetAsyncKeyState", "GetForegroundWindow")
     externals = {name: BASE + rva for name, rva in lib.IMPORT_RVAS.items()}
+    externals.update({name: BASE + rva for name, rva in (existing_imports or {}).items()})
     externals.update(copy_string=lib.COPY_STRING, original_send=t.SENDER_VA)
     externals.update({"__imp_" + name: BASE + data_rva + iat_offset + i * 8 for i, name in enumerate(extra_names)})
     code, data, exports, new_pdata = link_split(obj, BASE, code_rva, data_rva, externals)

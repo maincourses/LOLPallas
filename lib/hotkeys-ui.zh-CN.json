@@ -25,5 +25,7 @@
   "error": "操作未完成",
   "captureTitle": "录制独立组合键",
   "captureHint": "按住 Ctrl／Alt／Shift／~，再按主键；Esc 取消。也可直接在表格中输入 Ctrl+Alt+Q 或 ~+F1。",
-  "applyNote": "应用前请结束游戏，并从托盘彻底退出 WeGame；新版首次使用需先运行 Enable-Pallas-Hotkeys.cmd。"
+  "applyNote": "应用前请结束游戏，并从托盘彻底退出 WeGame；新版首次使用需先运行 Enable-Pallas-Hotkeys.cmd。",
+  "portableTitle": "LoL 本地快捷喊话 · 分享测试版 · 64 KiB",
+  "portableApplyNote": "首次运行 Install.cmd 安装；应用前请退出游戏及 WeGame。此版尚未完成游戏内验证，请先在训练模式测试。"
 }

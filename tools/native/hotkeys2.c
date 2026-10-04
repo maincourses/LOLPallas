@@ -14,11 +14,17 @@ API int __stdcall ReadFile(HANDLE, void *, DWORD, DWORD *, void *);
 API int __stdcall CloseHandle(HANDLE);
 API short __stdcall GetAsyncKeyState(int);
 API HANDLE __stdcall GetForegroundWindow(void);
+#ifdef LPS_PORTABLE
+API int __stdcall SHGetFolderPathW(HANDLE, int, HANDLE, DWORD, WORD *);
+static volatile DWORD load_attempted;
+#endif
 extern void *copy_string(void *, const char *);
 extern void original_send(const char *);
 
+#ifndef LPS_PORTABLE
 static const WORD library_path[] = L"C:\\Users\\zly\\AppData\\Local\\PallasCustomShout\\hotkeys-v2.bin";
 static const char prefix[] = "{\"_lps_keys_v2\":\"";
+#endif
 static const char empty_scheme[] =
     "{\"0\":\"\",\"1\":\"\",\"2\":\"\",\"3\":\"\",\"4\":\"\","
     "\"5\":\"\",\"6\":\"\",\"7\":\"\",\"8\":\"\",\"9\":\"\","
@@ -89,9 +95,17 @@ static int valid_text(const unsigned char *p, DWORD n) {
     return visible != 0;
 }
 static int validate(DWORD length) {
+#ifdef LPS_PORTABLE
+    static const char magic[] = "LPSKEY3";
+#else
     static const char magic[] = "LPSKEY2";
+#endif
     for (DWORD i = 0; i < 8; ++i) if (blob[i] != (unsigned char)magic[i]) return 0;
+#ifdef LPS_PORTABLE
+    DWORD count = u32(blob + 12), at = 20;
+#else
     DWORD count = u32(blob + 12), at = 16;
+#endif
     if (u32(blob + 8) != length || !count || count > MAX_ENTRIES) return 0;
     DWORD seen[128];
     for (DWORD i = 0; i < 128; ++i) seen[i] = 0;
@@ -112,6 +126,43 @@ static int validate(DWORD length) {
     if (at != length) return 0;
     entry_count = count; return 1;
 }
+#ifdef LPS_PORTABLE
+static int LoadPortable(void) {
+    DWORD ticket = __atomic_add_fetch(&generation, 1, __ATOMIC_ACQ_REL);
+    __atomic_store_n(&load_attempted, 1, __ATOMIC_RELEASE);
+    __atomic_store_n(&active, 0, __ATOMIC_RELEASE);
+    if (!acquire()) return 0;
+    int ok = 0;
+    DWORD count = 0, length = 0;
+    WORD path[320];
+    static const WORD suffix[] = L"\\LOLPallasPortable\\hotkeys.bin";
+    entry_count = 0; foreground = 0;
+    for (DWORD i = 0; i < 256; ++i) pressed[i] = 0;
+    path[0] = 0;
+    /* Reuse the already-imported Shell32 function, not usernames/env strings. */
+    if (SHGetFolderPathW(0, 0x1C, 0, 0, path) != 0) goto done;
+    while (length < 260 && path[length]) ++length;
+    if (!length || length + sizeof(suffix) / sizeof(WORD) > 260) goto done;
+    for (DWORD i = 0; i < sizeof(suffix) / sizeof(WORD); ++i) path[length + i] = suffix[i];
+    HANDLE file = CreateFileW(path, 0x80000000u, 1, 0, 3, 0x00200080u, 0);
+    if (!file || file == (HANDLE)(SIZE_T)-1) goto done;
+    ok = ReadFile(file, blob, CAPACITY + 1, &count, 0);
+    CloseHandle(file);
+    if (!ok || count < 30 || count > CAPACITY) { ok = 0; goto done; }
+    DWORD hash = 2166136261u;
+    for (DWORD i = 20; i < count; ++i) hash = (hash ^ blob[i]) * 16777619u;
+    ok = hash == u32(blob + 16) && validate(count);
+done:
+    loaded_generation = ticket;
+    __atomic_store_n(&active, (DWORD)ok, __ATOMIC_RELEASE);
+    release(); return ok;
+}
+void *ReadLocalScheme(void *destination, const char *source) {
+    (void)source;
+    /* Incoming cloud text does not supply/override any local records. */
+    return copy_string(destination, LoadPortable() ? empty_scheme : failed_scheme);
+}
+#else
 void *ReadLocalScheme(void *destination, const char *source) {
     /* Invalidate before attempting the gate: contention fails closed. */
     DWORD ticket = __atomic_add_fetch(&generation, 1, __ATOMIC_ACQ_REL);
@@ -141,11 +192,21 @@ done:
     release();
     return copy_string(destination, ok ? empty_scheme : failed_scheme);
 }
+#endif
 
 void CustomKeyboard(void *object, DWORD message, SIZE_T key, SIZE_T unused) {
     (void)object; (void)unused;
+#ifdef LPS_PORTABLE
+    if (key >= 256 || (message != 0x100 && message != 0x101 &&
+        message != 0x104 && message != 0x105)) return;
+    /* Load once on the first real keyboard callback if cloud receive has not
+     * run. No startup send, global hook, timers, synthetic input or retry loop. */
+    if (!__atomic_load_n(&load_attempted, __ATOMIC_ACQUIRE)) LoadPortable();
+    if (!acquire()) return;
+#else
     if (key >= 256 || (message != 0x100 && message != 0x101 &&
         message != 0x104 && message != 0x105) || !acquire()) return;
+#endif
     if (!__atomic_load_n(&active, __ATOMIC_ACQUIRE) ||
         loaded_generation != __atomic_load_n(&generation, __ATOMIC_ACQUIRE)) { release(); return; }
     HANDLE current = GetForegroundWindow();

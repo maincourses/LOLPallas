@@ -1,6 +1,14 @@
 # LOLPallas
 
-WeGame 本地快捷喊话及中文编辑器。新版候选支持 **64 KiB 文案库、1～512 条消息、每条独立组合键**。当前是 **zly 这台电脑的版本锁定实验版**，不是通用安装器。
+WeGame 本地快捷喊话及中文编辑器。新版候选支持 **64 KiB 文案库、1～512 条消息、每条独立组合键**。本机仍使用 v2；另提供不绑定用户名和盘符的 **v3 分享测试包**，仍锁定经核验的 WeGame 组件版本。
+
+## 分享测试包（v3）
+
+`tools/Build-Portable-Package.ps1` 生成干净 ZIP：自动检测／手动选择 WeGame、同用户管理员安装、本地编辑、应用和备份还原；接收者不需要 Python 或编译器。只带公共默认文案及二进制差异，不带个人 messages.json、备份或完整腾讯组件。
+
+接收者全部解压，退出游戏和 WeGame，运行包内 `Install.cmd`，阅读风险提示并确认，再用 `Open-Editor.cmd`。安装后手动开启 WeGame“一键喊话”，先在训练模式验证。未知组件版本拒绝替换。
+
+**这是尚未完成游戏内验证的实验包，不能保证任意电脑即用。** 本机 v2 也尚未游戏实测。v3 不由打包流程自动安装；当前 v2 和私人文案保持不动。完整用法见 [分享包说明](portable/README.md)，原理与测试边界见 [v3 设计说明](docs/portable-v3.md)。不要在源码的 `portable/` 子目录直接运行 CMD，那些入口用于打包后根目录。
 
 ## 新版：64 KiB／独立快捷键
 
@@ -93,6 +101,10 @@ LOLPallas/
   tools/native/              离线 DLL 构建源码和汇编
   tools/Test.ps1             测试入口
   tools/Build-Package.ps1    生成干净分发包
+  tools/Build-Portable-Package.ps1  生成 v3 分享测试包
+  tools/Test-Portable.ps1    v3 离线验证入口
+  Manage-Pallas-Portable.ps1 新版可移植安装／应用／还原
+  portable/                 分享包入口模板、公共文案和说明
   tests/                     校验、控件和隔离文件测试
   build/、dist/、backups/     生成数据，Git 忽略
 ```
@@ -110,7 +122,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Build-Hotkeys-Experi
 
 GUI 日常使用无需 Python。源文件、界面及事务测试使用 Windows PowerShell 5.1 和 WinForms，生成文件只写入 `build/` 或具名临时目录，不改运行响应、不发送消息。原生构建及隔离指令测试使用本机 Python 和 Clang；不会加载腾讯 DLL，启动应用时也不运行 Python。
 
-`tools/Build-Package.ps1` 仍明确只打包旧二十条版本，使用旧编辑入口及独立旧版说明，**不是 v2 分发包**。v2 暂不提供通用安装包；不能把旧包当成 64 KiB 自定义键位版。
+`tools/Build-Package.ps1` 仍只打包旧二十条版本，**不是新版分发包**。新版分享请用 `tools/Build-Portable-Package.ps1`，得到名称带 `Portable-Test` 的 v3 ZIP。v2 本机安装路径不随 v3 的构建／打包改变；不能把旧包当成 64 KiB 自定义键位版。
 
 CMD 使用 ASCII / CRLF；PowerShell 源码保持 ASCII，中文界面文本放在 UTF-8 JSON 中，避免 Windows PowerShell 5.1 编码问题。
 
