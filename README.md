@@ -2,9 +2,9 @@
 
 WeGame 本地快捷喊话及中文编辑器。新版候选支持 **64 KiB 文案库、1～512 条消息、每条独立组合键**。当前交付为不绑定用户名和盘符的 **v3 热键修复测试版**，仍锁定经核验的 WeGame 组件版本；真实游戏效果待复测。
 
-最新本机状态（2026-10-05）：已切回旧 **8 KiB 二十条 DLL + 本地文件版 pallas.exe + JSON 文案库**，用户在新局报告正常。全部文案、现代版草稿和备份保留，现代版安装记录已暂停。当前组件不是腾讯原版，不要使用现代 EXE 覆盖这个成功基线。切换与故障差异见 [加载定位记录](docs/load-failure-20261005.md)。
+最新本机状态（2026-10-05 14:16）：旧 **8 KiB 二十条 DLL + 本地文件版 pallas.exe + JSON 文案库** 已由用户在新局验证正常；随后按用户要求安装仅扩容的 64 KiB 对照，加载器和文案不变，游戏效果待验证。全部文案、现代版草稿和备份保留，现代版安装记录已暂停。当前组件不是腾讯原版，不要使用现代 EXE 覆盖此对照。切换与故障差异见 [加载定位记录](docs/load-failure-20261005.md)。
 
-本次新构建为[仅扩容 64 KiB 的旧版对照](docs/capacity-only-64k-control.md)：与成功的 8 KiB DLL 仅容量检查处 3 字节不同，保留旧启动器、JSON 格式、原生二十键和单条保护。离线 A/B 边界测试已通过，**未安装、未验证候选游戏发送**；当前实际安装仍是成功的 8 KiB。构建入口为 `tools/Build-Capacity-Control.ps1`，不是下文的现代独立键位版 EXE。
+本次新构建为[仅扩容 64 KiB 的旧版对照](docs/capacity-only-64k-control.md)：与成功的 8 KiB DLL 仅容量检查处 3 字节不同，保留旧启动器、JSON 格式、原生二十键和单条保护。离线 A/B 边界和安装回滚测试已通过，**已安装并回读，未验证候选游戏发送**。构建入口为 `tools/Build-Capacity-Control.ps1`，独立状态/精确恢复入口为 `Switch-Pallas-CapacityControl.ps1 -Mode Status/Restore`，不是下文的现代独立键位版 EXE。
 
 此前的固定二十键回退对照版保留了现代 64 KiB 库格式，仍报告游戏内失败，现已不在本机启用。它与这次旧 JSON 的容量对照不同；`Open-NativeKeys-Editor.cmd` 不是当前 8 KiB 配套的应用入口。历史说明见 [固定二十键回退说明](docs/native-keys-control.md)。
 

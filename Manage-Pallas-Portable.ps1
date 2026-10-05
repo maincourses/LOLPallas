@@ -38,6 +38,10 @@ try {
                 Write-Host '8 KiB HISTORICAL CONTROL ACTIVE: portable editor Apply/Install is suspended. Use Switch-Pallas-KnownWorking8K.ps1 -Mode Status for this pair; all portable texts/backups are retained.'
                 $runtimeRecord = [pscustomobject]@{ installed_at = $record.suspended_at }
             }
+            if ($record.status -eq 'suspended-for-legacy-capacity64k-control') {
+                Write-Host 'LEGACY CAPACITY-ONLY 64 KiB CONTROL ACTIVE: portable Apply/Install is suspended. Use Switch-Pallas-CapacityControl.ps1 -Mode Status/Restore; all texts/backups are retained.'
+                $runtimeRecord = [pscustomobject]@{ installed_at = $record.capacity_control_installed_at }
+            }
             if ($record.status -eq 'original-components-restored') {
                 Write-Host 'SIGNED ORIGINALS RESTORED: Install/Enable can establish a new ORIGINAL restore baseline; previous texts and all historical backups are retained.'
             }
