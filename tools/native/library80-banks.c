@@ -39,17 +39,28 @@ SIZE_T BankNormalize(void *controller, DWORD vk, DWORD event) {
     unsigned char *s = begin + MESSAGE_COUNT * STRIDE;
     if (*(SIZE_T *)(s + 24) != 15) return INVALID_SLOT;
     SIZE_T size = *(SIZE_T *)(s + 16);
+#ifdef LPS_DYNAMIC_BANKS
+    DWORD active = 0;
+    for (DWORD i = 0; i < MESSAGE_COUNT; ++i) {
+        unsigned char *entry = begin + i * STRIDE;
+        if (*(SIZE_T *)(entry + 16)) ++active;
+    }
+    if (active < 20 || active > MESSAGE_COUNT) return INVALID_SLOT;
+    DWORD bank_count = (active + LPS_BANK_SIZE - 1) / LPS_BANK_SIZE;
+#else
+    DWORD bank_count = BANK_COUNT;
+#endif
     if (!size) {
         if (s[0]) return INVALID_SLOT;
         s[0] = '0'; s[1] = '0'; s[2] = 0;
         *(SIZE_T *)(s + 16) = 2;
-    } else if (size != 2 || s[0] < '0' || s[0] >= '0' + BANK_COUNT ||
+    } else if (size != 2 || s[0] < '0' || s[0] >= '0' + bank_count ||
                s[1] < '0' || s[1] > '2' || s[2]) return INVALID_SLOT;
     DWORD bank = s[0] - '0';
     if (vk == 0x21 || vk == 0x22) { /* PageUp / PageDown */
         DWORD latch = vk == 0x21 ? 1 : 2;
         if (event == 0x100 && c[0x92] && s[1] == '0') {
-            s[0] = (unsigned char)('0' + ((bank + (latch == 1 ? BANK_COUNT - 1 : 1)) & (BANK_COUNT - 1)));
+            s[0] = (unsigned char)('0' + ((bank + (latch == 1 ? bank_count - 1 : 1)) % bank_count));
             s[1] = (unsigned char)('0' + latch);
         } else if (event == 0x101 && s[1] == '0' + latch) s[1] = '0';
         return INVALID_SLOT; /* A bank change NEVER sends a message. */

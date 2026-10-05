@@ -1,0 +1,45 @@
+{
+  "name": "lolpallas-local-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "author": "LOLPallas local project",
+  "description": "Local quick-message workbench for a pinned WeGame version",
+  "main": "desktop/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test desktop/tests/*.test.js",
+    "dist": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "electron-builder": "26.15.3",
+    "playwright-core": "1.63.0",
+    "png-to-ico": "3.0.2",
+    "sharp": "0.35.5"
+  },
+  "build": {
+    "appId": "local.lolpallas.workbench",
+    "productName": "LOLPallas",
+    "artifactName": "LOLPallas-Portable-${version}.${ext}",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "desktop/**/*",
+      "!desktop/tests/**",
+      "web/banks10.html",
+      "web/banks10.css",
+      "web/banks10.js",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "icon": "desktop/assets/icon.ico",
+      "target": [
+        "portable"
+      ],
+      "requestedExecutionLevel": "requireAdministrator",
+      "signAndEditExecutable": true
+    }
+  }
+}

@@ -13,6 +13,9 @@ API int __stdcall CloseHandle(HANDLE);
 API HANDLE __stdcall GetProcessHeap(void);
 API void *__stdcall HeapAlloc(HANDLE, DWORD, SIZE_T);
 API int __stdcall HeapFree(HANDLE, DWORD, void *);
+#ifdef LPS_PORTABLE_PATH
+API int __stdcall SHGetFolderPathW(void *, int, void *, DWORD, WCHAR *);
+#endif
 extern void *copy_string(void *, const char *);
 extern void original_send(const char *);
 
@@ -25,7 +28,24 @@ extern void original_send(const char *);
 #error Unsupported local-library capacity control
 #endif
 
+#ifndef LPS_PORTABLE_PATH
 static const WCHAR library_path[] = L"C:\\Users\\zly\\AppData\\Local\\PallasCustomShout\\library20-v1.json";
+#else
+static const WCHAR library_suffix[] = L"\\LPS\\library.json";
+static int get_library_path(WCHAR *path) {
+    /* Reuse the target DLL's existing Shell32 import; no guessed user name. */
+    if (SHGetFolderPathW(0, 0x001c, 0, 0, path) != 0) return 0;
+    DWORD at = 0, suffix = 0;
+    while (at < 260 && path[at]) ++at;
+    if (at == 260) return 0;
+    while (library_suffix[suffix]) {
+        if (at + 1 >= 260) return 0;
+        path[at++] = library_suffix[suffix++];
+    }
+    path[at] = 0;
+    return 1;
+}
+#endif
 static const char prefix[] = "{\"_lps_local_v1\":\"";
 static const char empty_scheme[] =
     "{\"0\":\"\",\"1\":\"\",\"2\":\"\",\"3\":\"\",\"4\":\"\","
@@ -74,6 +94,10 @@ void *ReadLocalScheme(void *destination, const char *source) {
     if (!hex8(token, &length) || token[8] != ':' ||
         !hex8(token + 9, &expected) || token[17] != '"' || token[18] != ',' ||
         length < 2 || length > LPS_LIBRARY_CAPACITY) return copy_string(destination, empty_scheme);
+#ifdef LPS_PORTABLE_PATH
+    WCHAR library_path[260];
+    if (!get_library_path(library_path)) return copy_string(destination, empty_scheme);
+#endif
     HANDLE file = CreateFileW(library_path, 0x80000000u, 1, 0, 3, 0x00200080u, 0);
     if (file == (HANDLE)(SIZE_T)-1 || !file) return copy_string(destination, empty_scheme);
     HANDLE heap = GetProcessHeap();

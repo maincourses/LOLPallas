@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'">
+  <title>LoL 本地快捷喊话 · 文案编辑器</title>
+  <link rel="stylesheet" href="banks10.css">
+  <script src="banks10.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand-mark" aria-hidden="true"><span>L</span><i></i></div>
+      <div class="brand-copy"><div class="eyebrow">LOL PALLAS / LOCAL EDITOR</div><strong>快捷喊话工作台</strong></div>
+      <div class="top-spacer"></div>
+      <div class="connection"><span class="connection-dot"></span>本地运行 · 不上传文案</div>
+      <button id="closeServer" class="icon-button" title="退出工作台" aria-label="退出工作台">×</button>
+    </header>
+
+    <div class="main-layout">
+      <aside class="sidebar">
+        <div class="sidebar-heading"><span>文案分组</span><small id="bankSummary">2 组 · 每组 10 条</small></div>
+        <nav id="banks" class="banks" aria-label="文案分组"></nav>
+        <div class="sidebar-spacer"></div>
+        <div class="tip-card">
+          <span class="tip-label">游戏内操作</span>
+          <p>按住 <kbd>~</kbd>，用 <kbd>PageUp</kbd> / <kbd>PageDown</kbd> 切组，再按 <kbd>1–9</kbd> 或 <kbd>0</kbd> 发送。</p>
+          <small>新增消息自动顺序进入下一组；原生面板仍只预览第一组。</small>
+        </div>
+      </aside>
+
+      <main class="main-content">
+        <section class="page-heading">
+          <div><div class="section-kicker">MESSAGE LIBRARY</div><h1>我的快捷文案</h1><p>从 20 条开始，最多 80 条。每组 10 条，新增后自动进入后续组。</p></div>
+          <div id="sourceBadge" class="source-badge">读取中</div>
+        </section>
+
+        <section class="scheme-card" aria-label="方案信息">
+          <label for="schemeTitle">方案名称</label>
+          <input id="schemeTitle" type="text" autocomplete="off" spellcheck="false" placeholder="输入方案名称">
+          <div class="scheme-side"><span>总容量</span><strong id="librarySize">— / 65,536 字节</strong><div class="meter"><span id="capacityMeter"></span></div></div>
+        </section>
+
+        <section class="install-card" aria-label="WeGame 安装状态">
+          <div class="install-copy"><strong>WeGame 安装目录</strong><span id="installStatus">正在检测组件</span></div>
+          <div id="weGameRoot" class="install-path">尚未选择</div>
+          <button id="autoDetect" class="button secondary" type="button">自动检测</button>
+          <button id="chooseRoot" class="button outline" type="button">选择目录</button>
+        </section>
+
+        <section class="work-area">
+          <div class="list-panel">
+            <div class="panel-title"><div><span class="section-kicker">BROWSE</span><h2 id="listTitle">第 1 组</h2></div><span id="listCount" class="count-pill">10 条</span></div>
+            <label class="search-box"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="搜索全部文案" autocomplete="off" aria-label="搜索全部文案"></label>
+            <div id="messageList" class="message-list" role="listbox" aria-label="文案列表"></div>
+            <button id="addMessage" class="add-message" type="button">＋ 新增消息 <span id="addHint">最多 80 条</span></button>
+          </div>
+
+          <div class="edit-panel">
+            <div class="panel-title"><div><span class="section-kicker">EDIT MESSAGE</span><h2 id="editTitle">选择一条消息</h2></div><span id="keyChip" class="key-chip">~ + 1</span></div>
+            <p class="edit-help">在这里编辑完整文案。当前工具没有单条字符数上限。</p>
+            <label for="messageBody" class="field-label">消息内容</label>
+            <textarea id="messageBody" spellcheck="false" placeholder="选择左侧消息后开始编辑" aria-describedby="messageHint"></textarea>
+            <div class="editor-foot"><span id="messageHint">不能包含换行或控制字符</span><span id="charCount">0 个 UTF-16 单位</span></div>
+            <button id="deleteMessage" class="delete-message" type="button">删除当前消息</button>
+            <div class="notice"><span class="notice-mark">!</span><p>长文案可能被游戏拒绝或引发异常；保存草稿不会改变当前对局。</p></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <footer class="action-bar">
+      <div class="save-indicator"><span id="dirtyDot" class="dirty-dot"></span><div><strong id="saveState">正在读取文案</strong><small id="detailState">本地数据不会上传</small></div></div>
+      <div class="actions"><button id="restoreComponents" class="button secondary">还原组件</button><button id="saveDraft" class="button outline">保存草稿</button><button id="saveApply" class="button primary">保存并应用 <span aria-hidden="true">↗</span></button></div>
+    </footer>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <dialog id="applyDialog" class="confirm-dialog"><div class="dialog-symbol">↗</div><h2>应用到 WeGame？</h2><p>请先结束当前对局，关闭英雄联盟客户端，并从托盘彻底退出 WeGame。工具只支持经过校验的 Pallas 组件版本；应用前自动备份，首次应用会替换所选组件。</p><div class="dialog-actions"><button id="cancelApply" class="button secondary">暂不应用</button><button id="confirmApply" class="button primary">已退出，继续应用</button></div></dialog>
+</body>
+</html>

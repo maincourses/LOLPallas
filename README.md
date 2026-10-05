@@ -1,58 +1,37 @@
-# LOLPallas · 当前可用版
+# LOLPallas · 本地快捷喊话工作台
 
-这里只保留用户已确认正常使用的 **八组十条版**，共 80 条消息，沿用 WeGame 原生面板键和本地文案加载方式。旧版独立热键 EXE、分享包和实验入口已经移出项目。
+Windows 单文件 Electron 编辑器。初始 20 条消息，最多 80 条；每 10 条为一组，新增消息会顺序进入下一组，删除时后续消息前移。游戏中沿用已验证的 `~` 面板键：按住 `~`，用 `PageDown` / `PageUp` 切组，再按主键盘 `1～9、0` 发送当前组第 1～10 条。原生面板仍只预览第一组，不显示当前组号。
 
-## 日常使用
+## 使用分享包
 
-双击 [Open-Banks10-Editor.cmd](Open-Banks10-Editor.cmd) 打开中文编辑器。
+给朋友发送 `dist/LOLPallas-Portable-0.1.0.exe` **一个文件**即可；接收者不需要安装 Python、Node.js 或复制本项目代码。双击时 Windows 会请求管理员权限，因为首次应用需要备份并替换 WeGame 安装目录中的两个组件。若 Windows 提示未知发布者，这是因为此实验版没有代码签名，并非验证通过的发行证书。
 
-- **保存文案**：保存草稿，不改变正在运行的游戏；可以在游戏中编辑并保存。
-- **保存并应用**：结束对局、关闭游戏和客户端，并从托盘彻底退出 WeGame 后使用。应用前自动备份，完成后重启 WeGame，进入新的一局。
-- **读取已应用文案**：读取当前运行库；未保存修改会先询问。
-- 不再通过 WeGame 设置界面编辑文案，也不要运行归档里的旧 EXE 应用。
+1. 打开 EXE，确认 WeGame 安装目录；未自动检测到时点“选择目录”，选择**包含 `apps\Pallas` 的 WeGame 根目录**，不是英雄联盟游戏目录。
+2. 编辑文案。新增会追加到末尾；删除任意一条会让后面的消息和键位顺序前移。至少保留 20 条；不能包含换行；整套 UTF-8 JSON 最多 65,536 字节。**没有单条长度保护**，很长的消息可能被游戏拒绝或引发异常。
+3. “保存草稿”只保存本机内容，不改游戏。首次“保存并应用”前，请结束对局、关闭 LoL，并从托盘彻底退出 WeGame。工具会核对组件哈希、备份原件并回读校验；未知版本会拒绝安装。
+4. 重启 WeGame，在助手里开启“一键喊话”，进入新的一局后测试。编辑器不需要在游戏时一直打开。需要恢复时，退出游戏与 WeGame 后点“还原组件”。
 
-游戏内开启 WeGame 的“一键喊话”，按住当前面板键 `~`：
+已应用库、草稿和备份放在接收者自己的 `%LOCALAPPDATA%\LPS`。分享 EXE **不含发送者个人文案**；在一台已有旧版文案的电脑上首次启动，会优先只读导入本机旧草稿/文案，不会自动覆盖它们。全新电脑默认 20 条通用示例文案。
 
-- `1～9、0`：发送当前组的第 1～10 条。
-- `PageDown` / `PageUp`：下一组 / 上一组，八组首尾循环；翻页本身不发送。
-- F1～F10 不触发本工具喊话。面板仍只预览第一组，不显示当前组号。
+当前分享包只支持源码中固定哈希的 **一版** Pallas/`TenPallas.dll`，以及本项目此前验证成功的八组十条版。WeGame 自动更新导致哈希变化时，工具会停止；若 WeGame 拒绝修改后的组件，应使用“还原组件”，不要继续强行兼容。桌面界面、离线原生分组和隔离安装/还原测试已通过；**便携组件尚需在真实游戏里做最终发送验证**，不能把离线测试当成所有电脑、所有版本都已验证。
 
-工具不再设置单条字符数上限、不截断完整文案；整套 UTF-8 JSON 仍限 **65536 字节**。这不代表游戏允许任意长度，长消息可能被拒绝或引发异常。当前分组发送已由用户确认可用，任意长文案的安全性未验证。
+## 本机既有成功版
 
-## 当前文件
+`Open-Banks10-Editor.cmd` / `Edit-Pallas-BanksTen.ps1` / `Manage-Pallas-BanksTen.ps1` 仍是此前用户确认可用的、绑定本机路径的历史版本。制作 Electron 包没有修改本机 WeGame 运行文件、当前已应用文案或备份。使用新 EXE 的“保存并应用”才会升级组件；升级前自动备份，失败会尝试回滚。
 
-| 文件／目录 | 用途 |
-|---|---|
-| `Open-Banks10-Editor.cmd`、`Edit-Pallas-BanksTen.ps1` | 编辑器入口和界面 |
-| `Manage-Pallas-BanksTen.ps1` | 当前版本的检查、应用和恢复 |
-| `Restore-Banks10.cmd` | 恢复到安装本版前的四组二十条版；先归档当前文案，草稿保留 |
-| `Switch-Pallas-*.ps1`、`lib/` | 当前管理器仍依赖的校验、备份和兼容辅助代码；不是日常操作入口 |
-| `tools/native/` | 当前版本离线构建与只读校验所需源码 |
-| `build/legacy-eight-banks-ten-20261005/` | 当前候选组件及构建、测试记录 |
-| `engine/assets/` | 离线重建所需原版 DLL，不用于手工替换运行文件 |
-| `docs/banks10.md` | 实现、限制和恢复说明 |
-| `.git/` | 完整版本历史 |
+## 开发与构建
 
-实际文案不在工程根目录：
+源码核心：`desktop/core.js` 负责数据校验、固定版本补丁、备份、应用和还原；`desktop/main.js` / `preload.js` 为受限 Electron IPC；`web/` 是 HTML/CSS/JS 界面；`tools/native/` 是离线原生候选源码。分享包只打包桌面运行文件和小型二进制**差量补丁**，不打包腾讯原始 EXE/DLL，也不需要在接收者电脑编译 C/Python。
 
-- 已应用库：`C:\Users\zly\AppData\Local\PallasCustomShout\library20-v1.json`
-- 编辑草稿：`C:\Users\zly\AppData\Local\LOLPallasPortable\Editor\banks10-messages.json`
-- 运行备份：`C:\Users\zly\AppData\Local\LOLPallasPortable\backups`
-
-只读状态检查：
+开发者在本项目目录运行：
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:\projects\LOLPallas\Manage-Pallas-BanksTen.ps1 -Mode Status
+npm ci
+npm test
+python tools/native/BuildPortableBanksTen.py
+python tools/native/TestPortableBanks.py
+node desktop/tests/ui-smoke.js
+npm run dist
 ```
 
-本版绑定本机用户路径和已核验组件，不是可直接分享给其他电脑的 EXE。遇到未知版本或正常完整性检查拒绝时，应停止并恢复，不强行应用。
-
-## 本次清理
-
-2026-10-05：旧入口、过期文档、EXE／分享包、重复构建、测试代码与基准夹具移到：
-
-`D:\projects\LOLPallas-archive\cleanup-20261005-d6f3b9840b78\files`
-
-归档保留原相对路径；同目录 `cleanup-manifest.json` 和 `cleanup-followup.md` 记录移出清单，可恢复。个人文案、Git 历史和 WeGame 实际运行文件均未改动。当前版本的必要辅助依赖保留，没有为清理而改写发送逻辑。测试代码已归档；若以后修改原生实现，先恢复测试代码和夹具再重新验证。
-
-清理前当前成功组件、最新已应用文案、草稿和状态的 12 文件快照位于归档的 `files/backups/current-success-20261005/`，不是应用时读取的文件。
+`BuildPortableBanksTen.py` 使用本地原版 DLL 夹具和 Clang；这些只在开发/重建补丁时需要。`engine/assets/TenPallas.original.dll` 未纳入 Git，也未分发。`desktop/assets/dll-*.json` 是固定版本差量，收到其他版本会拒绝应用。Electron portable target 的构建说明见 [electron-builder 官方文档](https://www.electron.build/docs/win/)。

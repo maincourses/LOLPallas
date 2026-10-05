@@ -9,6 +9,7 @@
 # Generated packages, reports and test fixtures.
 /build/
 /dist/
+/node_modules/
 __pycache__/
 *.py[cod]
 *.tmp

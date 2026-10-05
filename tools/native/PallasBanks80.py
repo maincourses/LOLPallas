@@ -22,7 +22,9 @@ VECTOR_COUNT = count.COUNT + 1
 
 def patch_banks(original, object_bytes):
     base, native = library.patch_library(original, object_bytes)
-    externals = {name: BASE + rva for name, rva in library.IMPORT_RVAS.items()}
+    portable = any(symbol["name"] == "__imp_SHGetFolderPathW" for symbol in library.Coff(object_bytes).symbols.values())
+    imports = {**library.IMPORT_RVAS, **(library.PORTABLE_IMPORT_RVAS if portable else {})}
+    externals = {name: BASE + rva for name, rva in imports.items()}
     externals.update(copy_string=library.COPY_STRING, original_send=library.twenty.SENDER_VA)
     _, exports, _, _ = library.Coff(object_bytes).link(BASE, native["new_section_rva"], externals)
     wrapper = exports["BankNormalizeWrapper"]

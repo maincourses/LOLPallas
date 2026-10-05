@@ -22,6 +22,7 @@ OLD_TWENTY_HASH = "3bceff093d67f86400dd0f3f1ece50f812d531926d5ff64cf72c227904da5
 IMPORT_RVAS = {"__imp_CreateFileW": 0xFC138, "__imp_CloseHandle": 0xFC150,
                "__imp_ReadFile": 0xFC1E0, "__imp_GetProcessHeap": 0xFC228,
                "__imp_HeapFree": 0xFC368, "__imp_HeapAlloc": 0xFC370}
+PORTABLE_IMPORT_RVAS = {"__imp_SHGetFolderPathW": 0xFC590}
 
 def align(n, a):
     return (n + a - 1) & -a
@@ -130,11 +131,12 @@ class Coff:
                          for i, section in enumerate(self.sections, 1) if section["name"] == ".pdata")
         return bytes(content), exports, pdata, positions
 
-def verify_imports(original):
+def verify_imports(original, portable=False):
     pe = twenty.PE64(original)
     head = struct.unpack_from("<I", original, 0x3C)[0] + 24
     rva, size = struct.unpack_from("<II", original, head + 112 + 8)
     at = pe.offset(BASE + rva, size)
+    expected = {**IMPORT_RVAS, **(PORTABLE_IMPORT_RVAS if portable else {})}
     found = {}
     while any(original[at:at + 20]):
         lookup, _, _, name, first = struct.unpack_from("<IIIII", original, at)
@@ -145,21 +147,22 @@ def verify_imports(original):
             item = struct.unpack_from("<Q", original, pe.offset(BASE + lookup + j * 8, 8))[0]
             if not item:
                 break
-            if not item >> 63 and dll == "KERNEL32.DLL":
+            if not item >> 63 and dll in (("KERNEL32.DLL", "SHELL32.DLL") if portable else ("KERNEL32.DLL",)):
                 no = pe.offset(BASE + item + 2, 1)
                 fn = "__imp_" + original[no:original.index(0, no)].decode()
-                if fn in IMPORT_RVAS:
+                if fn in expected:
                     found[fn] = first + j * 8
             j += 1
         at += 20
-    if found != IMPORT_RVAS:
+    if found != expected:
         raise ValueError("The known Win32 import slots did not match.")
 
 def patch_library(original, object_bytes):
     existing, _ = twenty.patch_copy(original)
     if twenty.sha256(existing) != OLD_TWENTY_HASH:
         raise ValueError("Baseline twenty-message candidate is not reproducible.")
-    verify_imports(original)
+    portable = any(symbol["name"] == "__imp_SHGetFolderPathW" for symbol in Coff(object_bytes).symbols.values())
+    verify_imports(original, portable=portable)
     pe = twenty.PE64(existing)
     header = struct.unpack_from("<I", existing, 0x3C)[0]
     optional = header + 24
@@ -167,7 +170,8 @@ def patch_library(original, object_bytes):
     new_rva = struct.unpack_from("<I", existing, optional + 56)[0]
     if new_rva != 0x190000 or section_alignment != 4096 or file_alignment != 512:
         raise ValueError("Unexpected PE geometry.")
-    externals = {name: BASE + rva for name, rva in IMPORT_RVAS.items()}
+    imports = {**IMPORT_RVAS, **(PORTABLE_IMPORT_RVAS if portable else {})}
+    externals = {name: BASE + rva for name, rva in imports.items()}
     externals.update(copy_string=COPY_STRING, original_send=twenty.SENDER_VA)
     content, exports, new_pdata, _ = Coff(object_bytes).link(BASE, new_rva, externals)
     for name in ("ReadLocalScheme", "SendNonempty"):
