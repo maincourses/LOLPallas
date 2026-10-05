@@ -240,7 +240,10 @@ try {
         Write-Host ('DLL matching bank candidate: '+((Get-ShoutFileHash $context.Dll) -eq $script:Banks80Hash))
         Write-Host ('Legacy loader unchanged: '+((Get-ShoutFileHash $context.Loader) -eq $script:Working8KLoaderHash))
         foreach ($e in $r.changes) { Write-Host ('File matching target: '+((Get-ShoutFileHash $e.Path) -eq $e.TargetHash)+'; '+$e.Path) }
-        Write-Host ('Latest local game log: '+((Get-PortableRuntimeEvidence $context $r) | ConvertTo-Json -Compress))
+        if ($r.text_test_max_utf16) { Write-Host ('DATA-ONLY length test: '+$r.text_test_max_utf16+' UTF-16 units; DLL/native guard unchanged at '+$r.utf16_guard+'. Backup: '+$r.text_test_backup) }
+        if ($r.status -eq 'installed-awaiting-game-test') {
+            Write-Host ('Latest local game log: '+((Get-PortableRuntimeEvidence $context $r) | ConvertTo-Json -Compress))
+        } else { Write-Host 'HISTORICAL/INACTIVE four-bank record: old session logs do not verify current components. For eight ten-key groups use Manage-Pallas-BanksTen.ps1 -Mode Status.' }
         Write-Host 'Panel preview is FIRST BANK only. No visible group indicator. Game sending remains unverified.'
         exit 0
     }

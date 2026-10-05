@@ -1,4 +1,6 @@
-/* OFFLINE ONLY. Four groups of twenty; the verified reader/path/protocol stays
+/* Own-source candidate. Default: four groups of twenty / 100-unit protection.
+ * Explicit ten-key profile: eight groups of ten / no character-count cap.
+ * The verified reader/path/protocol stays
  * unchanged. This object is never loaded into a game by the builder or tests.
  * A reserved, default-constructed std::string slot owns state (legal SSO "00").
  * No writable PE section, controller-field reuse, new imports or global state.
@@ -12,7 +14,17 @@
 #define MESSAGE_COUNT 80
 #define VECTOR_COUNT 81
 #define STRIDE 32
-#define MAX_UNITS 100
+#ifndef LPS_BANK_SIZE
+#define LPS_BANK_SIZE 20
+#endif
+#ifndef LPS_BANK_SINGLE_LIMIT
+#define LPS_BANK_SINGLE_LIMIT 100
+#endif
+#if LPS_BANK_SIZE != 10 && LPS_BANK_SIZE != 20
+#error Unsupported bank size
+#endif
+#define BANK_COUNT (MESSAGE_COUNT / LPS_BANK_SIZE)
+#define MAX_UNITS LPS_BANK_SINGLE_LIMIT
 #define INVALID_SLOT (~(SIZE_T)0)
 
 SIZE_T BankNormalize(void *controller, DWORD vk, DWORD event) {
@@ -31,13 +43,13 @@ SIZE_T BankNormalize(void *controller, DWORD vk, DWORD event) {
         if (s[0]) return INVALID_SLOT;
         s[0] = '0'; s[1] = '0'; s[2] = 0;
         *(SIZE_T *)(s + 16) = 2;
-    } else if (size != 2 || s[0] < '0' || s[0] > '3' ||
+    } else if (size != 2 || s[0] < '0' || s[0] >= '0' + BANK_COUNT ||
                s[1] < '0' || s[1] > '2' || s[2]) return INVALID_SLOT;
     DWORD bank = s[0] - '0';
     if (vk == 0x21 || vk == 0x22) { /* PageUp / PageDown */
         DWORD latch = vk == 0x21 ? 1 : 2;
         if (event == 0x100 && c[0x92] && s[1] == '0') {
-            s[0] = (unsigned char)('0' + ((bank + (latch == 1 ? 3 : 1)) & 3));
+            s[0] = (unsigned char)('0' + ((bank + (latch == 1 ? BANK_COUNT - 1 : 1)) & (BANK_COUNT - 1)));
             s[1] = (unsigned char)('0' + latch);
         } else if (event == 0x101 && s[1] == '0' + latch) s[1] = '0';
         return INVALID_SLOT; /* A bank change NEVER sends a message. */
@@ -47,16 +59,44 @@ SIZE_T BankNormalize(void *controller, DWORD vk, DWORD event) {
     if (vk >= 0x30 && vk <= 0x39) {
         local = vk - 0x30;
         statistic = vk;
+#if LPS_BANK_SIZE == 20
     } else if (vk >= 0x70 && vk <= 0x79) {
         local = (vk - 0x70 + 1) % 10 + 10;
         statistic = 0x30 + local % 10;
+#endif
     } else return INVALID_SLOT;
-    return ((SIZE_T)statistic << 32) | (bank * 20 + local);
+    return ((SIZE_T)statistic << 32) | (bank * LPS_BANK_SIZE + local);
 }
 
-/* The guard measures UTF-16 units from valid UTF-8, without truncation. It is
- * NOT a claim that the game accepts or safely handles one hundred units. */
+/* Default profile measures UTF-16 units; ten-key profile checks encoding and
+ * the existing whole-library byte bound only. Neither truncates text or
+ * guarantees that the original sender/game accepts long messages safely. */
 static int bounded_utf8(const unsigned char *p) {
+#if LPS_BANK_SINGLE_LIMIT == 0
+    /* No per-message character limit. The bound is the EXISTING whole-library
+     * allocation, including NUL: never scan outside that known maximum. */
+    if (!p) return 0;
+    SIZE_T bytes = 0;
+    while (bytes < LPS_LIBRARY_CAPACITY) {
+        DWORD n, cp, minimum;
+        unsigned char first = p[bytes++];
+        if (!first) return bytes > 1;
+        if (first < 0x80) { n = 0; cp = first; minimum = 0; }
+        else if (first >= 0xC2 && first <= 0xDF) { n = 1; cp = first & 31; minimum = 0x80; }
+        else if (first >= 0xE0 && first <= 0xEF) { n = 2; cp = first & 15; minimum = 0x800; }
+        else if (first >= 0xF0 && first <= 0xF4) { n = 3; cp = first & 7; minimum = 0x10000; }
+        else return 0;
+        for (DWORD i = 0; i < n; ++i) {
+            if (bytes >= LPS_LIBRARY_CAPACITY) return 0;
+            unsigned char next = p[bytes++];
+            if (next < 0x80 || next > 0xBF) return 0;
+            cp = (cp << 6) | (next & 63);
+        }
+        if (cp < minimum || cp > 0x10FFFF || (cp >= 0xD800 && cp <= 0xDFFF) || cp < 32 || cp == 127)
+            return 0;
+    }
+    return 0;
+#else
     if (!p || !*p) return 0;
     DWORD units = 0, bytes = 0;
     while (*p) {
@@ -81,6 +121,7 @@ static int bounded_utf8(const unsigned char *p) {
         if (units > MAX_UNITS) return 0;
     }
     return 1;
+#endif
 }
 
 void SendNonempty(const char *text) {

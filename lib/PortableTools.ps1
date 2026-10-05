@@ -92,7 +92,7 @@ function Get-PortableRuntimeEvidence($Context,$Record) {
     }
     if (-not $latest) { return [pscustomobject]@{ Stage='unknown'; Reason='No game session in the available log.' } }
     $since = [DateTime]::MinValue
-    foreach ($field in @('installed_at','upgraded_at')) {
+    foreach ($field in @('installed_at','upgraded_at','text_test_applied_at')) {
         if ($Record -and $Record.$field) {
             $value = [DateTimeOffset]::Parse([string]$Record.$field).UtcDateTime
             if ($value -gt $since) { $since=$value }

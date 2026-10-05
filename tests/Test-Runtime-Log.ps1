@@ -51,6 +51,8 @@ $bad = Get-PortableRuntimeEvidence $context $record
 Check ($bad.Stage -eq 'assistant-not-running' -and $bad.RunFlag -eq 0) 'Actual no-start stage identified'
 Check (-not $bad.SchemeRequested -and -not $bad.SchemeDispatched) 'Earlier session events do not leak into latest session'
 Check ($bad.MatchesCurrentInstall -and -not $bad.GameClosed) 'Active current session'
+$record | Add-Member -NotePropertyName text_test_applied_at -NotePropertyValue '2026-10-05T00:00:00Z'
+Check (-not (Get-PortableRuntimeEvidence $context $record).MatchesCurrentInstall) 'Text-only update also requires a fresh game session'
 $tail = $bytes + [byte[]]@(250,0,0,0) + (New-Object byte[] 166)
 Check (@(Read-PortableRuntimeEvents $tail $key).Count -eq 7) 'Partial concurrent append accepted only as incomplete tail'
 $malformed = [byte[]]$bytes.Clone(); $malformed[60]=1; $malformed[61]=0

@@ -45,7 +45,12 @@ try {
             if ($record.status -eq 'suspended-for-legacy-banks80-control') {
                 Write-Host 'LEGACY FOUR-BANK 80-MESSAGE CONTROL ACTIVE: portable Apply/Install is suspended. Use Switch-Pallas-Banks80.ps1 -Mode Status/Restore; personal texts and all backups retained.'
                 Write-Host ('Active bank DLL matching: ' + ($current -eq $record.active_control_dll_sha256))
-                $runtimeRecord = [pscustomobject]@{ installed_at = $record.bank_control_installed_at }
+                $runtimeRecord = [pscustomobject]@{ installed_at = $record.bank_control_installed_at; text_test_applied_at = $record.text_test_applied_at }
+            }
+            if ($record.status -eq 'suspended-for-legacy-banks10-control') {
+                Write-Host 'EIGHT BANKS OF TEN ACTIVE: portable editor Apply/Install is suspended. Use Open-Banks10-Editor.cmd and Manage-Pallas-BanksTen.ps1 -Mode Status/Restore. No individual character cap; whole library remains 64 KiB.'
+                Write-Host ('Active ten-key bank DLL matching: ' + ($current -eq $record.active_control_dll_sha256))
+                $runtimeRecord = [pscustomobject]@{ installed_at = $record.banks10_installed_at; text_test_applied_at = $record.text_test_applied_at }
             }
             if ($record.status -eq 'original-components-restored') {
                 Write-Host 'SIGNED ORIGINALS RESTORED: Install/Enable can establish a new ORIGINAL restore baseline; previous texts and all historical backups are retained.'

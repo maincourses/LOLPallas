@@ -24,7 +24,7 @@ parser.add_argument("--control-baseline", action="store_true",
                     help="Child only: test the reproduced 8 KiB object in a capacity-control build.")
 parser.add_argument("--reader-fixture", type=Path,
                     help="Child only: read a generated project build JSON fixture, not live data.")
-parser.add_argument("--fixture-max-units", type=int, choices=(50, 100), default=50,
+parser.add_argument("--fixture-max-units", type=int, choices=(0, 50, 100), default=50,
                     help="Only the external offline fixture guard; existing baseline tests stay at 50.")
 parser.add_argument("--banks-object-build", type=Path,
                     help="Child reader-only: test the compiled offline bank reader instead of the baseline object.")
@@ -36,6 +36,8 @@ if args.reader_fixture:
         raise ValueError("Reader-only fixtures must be generated project build files in a child.")
 elif args.fixture_max_units != 50:
     raise ValueError("The 100-unit override requires an explicit offline reader fixture.")
+if args.fixture_max_units == 0 and not args.banks_object_build:
+    raise ValueError("The no-character-cap fixture requires the explicit ten-key bank object profile.")
 spec = importlib.util.spec_from_file_location("library", root / "tools/native/PallasLibrary.py")
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
@@ -56,12 +58,13 @@ if args.control_baseline:
     capacity = 8192
 if args.banks_object_build:
     b = args.banks_object_build.resolve()
-    if (root / "build" not in b.parents or not args.reader_fixture or args.fixture_max_units != 100 or
+    if (root / "build" not in b.parents or not args.reader_fixture or args.fixture_max_units not in (0, 100) or
         args.control_baseline or capacity != 65536):
         raise ValueError("Banks object override is limited to explicit offline 100-unit reader children.")
     bm = json.loads((b / "manifest.json").read_bytes())
     obj = (b / "library80-banks.obj").read_bytes()
-    if (bm["experiment"] != "legacy-four-banks-real-chinese-100-offline-v1" or
+    profile = "legacy-eight-ten-key-banks-no-character-cap-v1" if args.fixture_max_units == 0 else "legacy-four-banks-real-chinese-100-offline-v1"
+    if (bm["experiment"] != profile or
         m.twenty.sha256(obj) != bm["object_sha256"]):
         raise ValueError("Unrecognized compiled bank reader fixture.")
 scheme = m.twenty.read_scheme(root / "experiments/local-library/scheme20.example.json")
@@ -328,7 +331,9 @@ def native(real_io=False):
             real = args.reader_fixture.read_bytes()
             value = json.loads(real, object_pairs_hook=m.twenty.unique_object)
             assert len(real) > 8192 and set(value) == {"title", "key", *(str(i) for i in range(80))}
-            assert all(0 < m.twenty.utf16_length(value[str(i)]) <= args.fixture_max_units for i in range(80))
+            assert all(0 < m.twenty.utf16_length(value[str(i)]) and
+                       (args.fixture_max_units == 0 or m.twenty.utf16_length(value[str(i)]) <= args.fixture_max_units)
+                       for i in range(80))
             copied = run(real)
             accepted = len(real) <= capacity
             if accepted:
