@@ -1,6 +1,6 @@
 # 八组十条／数字键／无单条字数上限
 
-2026-10-05，用户确认四组二十条版将新增文案缩短后可以发送，并要求每组十条、去掉 F 键发送及工具自己的单条字数上限。本版已备份安装并回读；未启动游戏或发送测试消息，新分组和长文案等待用户在新训练局验证。
+2026-10-05，按用户要求改为每组十条、去掉 F 键发送及工具自己的单条字数上限，备份安装并回读。用户随后确认本版“可以了”，当前保留本版作为成功基线；没有宣称任意长文案都能安全发送，也没有自动运行游戏验证。
 
 ## 使用
 
@@ -15,7 +15,7 @@
 - **读取已应用文案**：读取运行库；有未保存修改会询问是否放弃。
 - 草稿位置为 `%LOCALAPPDATA%\LOLPallasPortable\Editor\banks10-messages.json`，与旧现代版 `messages.json` 分开；不会覆盖后者。不存在草稿时编辑器读取当前已应用库。
 
-不要点旧现代 EXE 的“安装／启用”或“保存并应用”，也不要再用 `Set-Pallas-Banks80-ShortText.ps1` 修改本版。后者是旧四组版的长度对照工具，现暂停。
+旧现代 EXE、旧编辑器及短文案对照入口已移到工程外归档，当前只使用 `Open-Banks10-Editor.cmd`。保留的旧名称辅助模块是管理器依赖，不要单独运行来覆盖本版。
 
 ## 上限的准确含义
 
@@ -30,7 +30,7 @@
 ## 实现和验证
 
 - 沿用本地文件版 `pallas.exe`、旧平坦 JSON、64 KiB 读取器、原输入门控／防重复／发送函数／十槽统计，以及八十个文本加一个已构造 SSO 状态字符串。
-- 源码 `tools/native/library80-banks.c` 以 `LPS_BANK_SIZE=10`、`LPS_BANK_SINGLE_LIMIT=0` 编译：状态组号为 0～7，数字槽为 `group*10+digit`，接收原十条轮转索引不变，F 键归一化拒绝。默认宏仍生成旧四组／100 单位 DLL；重新链接结果逐字节相同于旧 `F261F5E7...177119`，旧产物保留。
+- 源码 `tools/native/library80-banks.c` 以 `LPS_BANK_SIZE=10`、`LPS_BANK_SINGLE_LIMIT=0` 编译：状态组号为 0～7，数字槽为 `group*10+digit`，接收原十条轮转索引不变，F 键归一化拒绝。默认宏仍生成旧四组／100 单位 DLL；此前重新链接结果逐字节相同于旧 `F261F5E7...177119`，旧产物现归档于工程外。
 - 新 DLL SHA-256：`5407DFA6A92640B216F5FBA143A5BAF63EC68E46A108FC664356DF3A037BF3E2`；加载器仍 `803870E3FDA683443471E835699B065293724DC7E0F3289D0093FC84C8E30935`。不增加导入、可写 PE 节、独立键盘监听器、网络或游戏进程操作。
 - 6 项 PE／确切补丁／导入／原非代码节和证书／RX 节／展开／ASLR 及文案测试；524 次自己编译的 C/ASM 调用，覆盖八十槽、八组循环、数字与 F 键、翻页防重复、坏布局和寄存器、500／10000 个中文及整库边界的无截断记录发送。全部只调用自己的记录回调，不执行腾讯发送函数。
 - 自编译读取器的 10 项模拟 I/O、4 项生成目录内真实 Win32 读取通过；完整回读八十条。只缩短预览且允许 500 个中文／emoji、整库溢出拒绝的生产校验也测试。
@@ -47,12 +47,12 @@
 
 精确备份：`C:\Users\zly\AppData\Local\LOLPallasPortable\backups\legacy-banks10-157bd638030e4ac0acf3f86b04a26e1e`。
 
-当前记录 `%LOCALAPPDATA%\LOLPallasPortable\legacy-banks10-control.json` 状态 `installed-awaiting-game-test`；旧四组记录暂停为 `suspended-for-banks10-control`，现代／旧库记录暂停为 `suspended-for-legacy-banks10-control`。状态命令：
+当前记录 `%LOCALAPPDATA%\LOLPallasPortable\legacy-banks10-control.json` 内部状态仍为 `installed-awaiting-game-test`，用户已在聊天中确认本版可用。保留内部状态以兼容现有编辑器和恢复校验，不改写离线证明为游戏验证。旧四组记录暂停为 `suspended-for-banks10-control`，现代／旧库记录暂停为 `suspended-for-legacy-banks10-control`。状态命令：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File D:\projects\LOLPallas\Manage-Pallas-BanksTen.ps1 -Mode Status
 ```
 
-恢复先关闭游戏、客户端和托盘 WeGame，双击 **`Restore-Banks10.cmd`**，精确回到用户成功的**四组二十条短文案版**；当前八十条和状态先归档，所有编辑草稿保留。若之后还想回到容量对照二十条版，再运行旧 `Restore-Banks80.cmd`，不能颠倒顺序。
+恢复先关闭游戏、客户端和托盘 WeGame，双击 **`Restore-Banks10.cmd`**，精确回到用户成功的**四组二十条短文案版**；当前八十条和状态先归档，所有编辑草稿保留。其他历史恢复入口已移出当前工程；进一步回退时需从归档恢复配套，不要直接调用旧名称辅助脚本。
 
 新版状态与原始备份、目标路径和摘要严格校验，进程运行／未知组件／外部恢复路径／被改文件会拒绝替换。应用文案有同路径互斥锁、逐项原子 CAS、完整旧文案备份及逆序故障恢复，应用后的恢复记录同步当前摘要。
