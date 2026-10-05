@@ -23,6 +23,7 @@ try {
     $context = New-PortableContext $resolvedRoot $data
     if ($Mode -eq 'Status') {
         $record = $null
+        $runtimeRecord = $null
         $current = Get-ShoutFileHash $context.Dll
         Write-Host ('WeGame: ' + $context.Root)
         Write-Host ('Component SHA256: ' + $current)
@@ -31,7 +32,12 @@ try {
         Write-Host ('Local library: ' + $context.Library)
         if (Test-Path -LiteralPath $context.State -PathType Leaf) {
             $record = Read-PortableState $context
+            $runtimeRecord = $record
             Write-Host ('State: ' + $record.status + '; messages: ' + $record.message_count)
+            if ($record.status -eq 'suspended-for-known-working-8k-control') {
+                Write-Host '8 KiB HISTORICAL CONTROL ACTIVE: portable editor Apply/Install is suspended. Use Switch-Pallas-KnownWorking8K.ps1 -Mode Status for this pair; all portable texts/backups are retained.'
+                $runtimeRecord = [pscustomobject]@{ installed_at = $record.suspended_at }
+            }
             if ($record.status -eq 'original-components-restored') {
                 Write-Host 'SIGNED ORIGINALS RESTORED: Install/Enable can establish a new ORIGINAL restore baseline; previous texts and all historical backups are retained.'
             }
@@ -39,7 +45,7 @@ try {
             Write-Host ('Applied source matching: ' + ((Get-ShoutFileHash $context.Source) -eq $record.installed_source_sha256))
         } else { Write-Host 'No portable installation record. Install.cmd is required before Apply.' }
         try {
-            $runtime = Get-PortableRuntimeEvidence $context $record
+            $runtime = Get-PortableRuntimeEvidence $context $runtimeRecord
             Write-Host ('LATEST LOCAL GAME LOG: ' + ($runtime | ConvertTo-Json -Compress))
             if ($runtime.Stage -eq 'assistant-not-running' -and $runtime.MatchesCurrentInstall) {
                 Write-Host 'RUNTIME FAILURE: component did not report running; keyboard/message logic is not yet proven to execute. Installation readback is NOT runtime success.'

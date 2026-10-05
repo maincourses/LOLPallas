@@ -97,7 +97,7 @@ function Read-ShoutScheme([string]$Path) {
 
 function Assert-ShoutStopped {
     $active = @(Get-Process | Where-Object {
-        $_.ProcessName -match '^(wegame|pallas|League of Legends|LeagueClient|LeagueClientUx|LeagueClientUxRender|tgp_daemon|TenPallas)$'
+        $_.ProcessName -match '^(wegame|pallas|CrossProxy|League of Legends|LeagueClient|LeagueClientUx|LeagueClientUxRender|tgp_daemon|TenPallas)$'
     })
     if ($active.Count) {
         throw ('Exit the game and exit WeGame from the system tray first. Running: ' + (($active | ForEach-Object { $_.ProcessName + ' (PID ' + $_.Id + ')' }) -join ', '))
