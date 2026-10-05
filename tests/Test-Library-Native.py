@@ -22,8 +22,20 @@ parser.add_argument("--child", action="store_true")
 parser.add_argument("--real-io-child", action="store_true")
 parser.add_argument("--control-baseline", action="store_true",
                     help="Child only: test the reproduced 8 KiB object in a capacity-control build.")
+parser.add_argument("--reader-fixture", type=Path,
+                    help="Child only: read a generated project build JSON fixture, not live data.")
+parser.add_argument("--fixture-max-units", type=int, choices=(50, 100), default=50,
+                    help="Only the external offline fixture guard; existing baseline tests stay at 50.")
+parser.add_argument("--banks-object-build", type=Path,
+                    help="Child reader-only: test the compiled offline bank reader instead of the baseline object.")
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
+if args.reader_fixture:
+    args.reader_fixture = args.reader_fixture.resolve()
+    if not (args.child or args.real_io_child) or root / "build" not in args.reader_fixture.parents:
+        raise ValueError("Reader-only fixtures must be generated project build files in a child.")
+elif args.fixture_max_units != 50:
+    raise ValueError("The 100-unit override requires an explicit offline reader fixture.")
 spec = importlib.util.spec_from_file_location("library", root / "tools/native/PallasLibrary.py")
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
@@ -42,6 +54,16 @@ if args.control_baseline:
         raise ValueError("Baseline override is limited to capacity-control child fixtures.")
     obj = (args.build / "baseline8k.obj").read_bytes()
     capacity = 8192
+if args.banks_object_build:
+    b = args.banks_object_build.resolve()
+    if (root / "build" not in b.parents or not args.reader_fixture or args.fixture_max_units != 100 or
+        args.control_baseline or capacity != 65536):
+        raise ValueError("Banks object override is limited to explicit offline 100-unit reader children.")
+    bm = json.loads((b / "manifest.json").read_bytes())
+    obj = (b / "library80-banks.obj").read_bytes()
+    if (bm["experiment"] != "legacy-four-banks-real-chinese-100-offline-v1" or
+        m.twenty.sha256(obj) != bm["object_sha256"]):
+        raise ValueError("Unrecognized compiled bank reader fixture.")
 scheme = m.twenty.read_scheme(root / "experiments/local-library/scheme20.example.json")
 
 class Offline(unittest.TestCase):
@@ -173,8 +195,10 @@ def native(real_io=False):
         if real_io:
             # Only this GENERATED build fixture is opened, NEVER the live path
             # embedded in C. Native flags/ReadFile/heap/close APIs are real.
-            fixture = (args.build / state.get("io_fixture", "library20-v1.json")).resolve()
-            assert args.build.resolve() in fixture.parents
+            fixture_root = args.reader_fixture.parent if args.reader_fixture else args.build.resolve()
+            fixture_name = args.reader_fixture.name if args.reader_fixture else "library20-v1.json"
+            fixture = (fixture_root / state.get("io_fixture", fixture_name)).resolve()
+            assert fixture_root in fixture.parents
             handle = k.CreateFileW(str(fixture),
                                     access, share, security, disposition, flags, template)
             state["handle"] = handle
@@ -273,8 +297,9 @@ def native(real_io=False):
         return state["copied"]
     def empty(raw):
         value = json.loads(raw)
-        assert all(value[str(i)] == "" for i in range(20))
-        for i in range(20):
+        empty_count = 80 if args.banks_object_build else 20
+        assert all(value[str(i)] == "" for i in range(empty_count))
+        for i in range(empty_count):
             buf = ctypes.create_string_buffer(value[str(i)].encode()); send(ctypes.addressof(buf))
         assert state["sent"] == []
     def capacity_fixtures():
@@ -299,6 +324,35 @@ def native(real_io=False):
                 empty(copied)
                 assert state["open"] == state["read"] == state["alloc"] == 0
     try:
+        if args.reader_fixture:
+            real = args.reader_fixture.read_bytes()
+            value = json.loads(real, object_pairs_hook=m.twenty.unique_object)
+            assert len(real) > 8192 and set(value) == {"title", "key", *(str(i) for i in range(80))}
+            assert all(0 < m.twenty.utf16_length(value[str(i)]) <= args.fixture_max_units for i in range(80))
+            copied = run(real)
+            accepted = len(real) <= capacity
+            if accepted:
+                assert copied == real and json.loads(copied) == value
+                assert state["read"] == state["alloc"] == state["close"] == state["free"] == 1
+                token = f'{{"_lps_local_v1":"{len(real):08X}:{m.fnv1a(real):08X}",'.encode()
+                # Both actual file IO and mocked IO reject inconsistent metadata.
+                wrong = f'{{"_lps_local_v1":"{len(real) + 1:08X}:{m.fnv1a(real):08X}",'.encode()
+                empty(run(real, source=wrong))
+                wrong = f'{{"_lps_local_v1":"{len(real):08X}:{m.fnv1a(real) ^ 1:08X}",'.encode()
+                empty(run(real, source=wrong))
+                if not real_io:
+                    for data in (real[:-1], real + b"x", bytes([real[0] ^ 1]) + real[1:]):
+                        empty(run(data, source=token))
+                    for flags in (dict(no_memory=True), dict(no_heap=True), dict(read_error=True)):
+                        empty(run(real, **flags))
+                assert run(real) == real
+            else:
+                empty(copied)
+                assert state["open"] == state["read"] == state["alloc"] == 0
+            return dict(passed=True, cases=cases, own_process_only=True, fixture_bytes=len(real),
+                capacity_boundary=capacity, accepted=accepted, complete_json_message_count=80 if accepted else 0,
+                actual_win32_file_io=real_io, real_dll_loaded=False, live_runtime_files_accessed=False,
+                tencent_json_parser_or_eighty_key_selection_verified=False, real_game_send_verified=False)
         real = (args.build / "library20-v1.json").read_bytes()
         assert len(real) == 2294 and run(real) == real
         assert json.loads(state["copied"])["19"].endswith("LIB-END-20")
