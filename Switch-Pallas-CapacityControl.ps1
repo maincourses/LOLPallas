@@ -234,7 +234,11 @@ try {
         if (Test-Path -LiteralPath (Join-Path $data 'legacy-capacity-control.json')) {
             $r=(Read-CapacityRecord $context $script:Working8KProfile).Record
             Write-Host ('Control: '+$r.status+'; backup: '+$r.backup)
-            Write-Host ('Latest local game log: '+((Get-PortableRuntimeEvidence $context $r) | ConvertTo-Json -Compress))
+            if ($r.status -eq 'installed-awaiting-game-test') {
+                Write-Host ('Latest local game log: '+((Get-PortableRuntimeEvidence $context $r) | ConvertTo-Json -Compress))
+            } else {
+                Write-Host 'HISTORICAL/INACTIVE capacity control: its old log is not evidence for the currently loaded DLL. If bank control is active, use Switch-Pallas-Banks80.ps1 -Mode Status/Restore.'
+            }
         }; exit 0
     }
     $mutexId=(Get-ShoutByteHash ([Text.Encoding]::UTF8.GetBytes($context.Dll.ToUpperInvariant()))).Substring(0,24)
