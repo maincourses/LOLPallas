@@ -28,12 +28,8 @@
 | `Restore-Banks10.cmd` | 恢复到安装本版前的四组二十条版；先归档当前文案，草稿保留 |
 | `Switch-Pallas-*.ps1`、`lib/` | 当前管理器仍依赖的校验、备份和兼容辅助代码；不是日常操作入口 |
 | `tools/native/` | 当前版本离线构建与只读校验所需源码 |
-| `tests/` | 当前版本测试及必要的测试辅助 |
 | `build/legacy-eight-banks-ten-20261005/` | 当前候选组件及构建、测试记录 |
-| `build/legacy-capacity64k-control-recheck-20261005/` | 当前原生读取测试需要的基准夹具，不是另一套使用入口 |
 | `engine/assets/` | 离线重建所需原版 DLL，不用于手工替换运行文件 |
-| `experiments/local-library/scheme20.example.json` | 当前读取测试依赖的公共夹具 |
-| `backups/current-success-20261005/` | 清理前当前成功组件、最新已应用文案、草稿和状态的精确快照 |
 | `docs/banks10.md` | 实现、限制和恢复说明 |
 | `.git/` | 完整版本历史 |
 
@@ -53,8 +49,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File D:\projects\LOLPallas\Ma
 
 ## 本次清理
 
-2026-10-05：旧入口、过期文档、EXE／分享包、重复构建和旧测试产物移到：
+2026-10-05：旧入口、过期文档、EXE／分享包、重复构建、测试代码与基准夹具移到：
 
 `D:\projects\LOLPallas-archive\cleanup-20261005-d6f3b9840b78\files`
 
-归档保留原相对路径；同目录 `cleanup-manifest.json` 记录移出清单，可恢复。个人文案、Git 历史和 WeGame 实际运行文件均未改动。当前版本的必要辅助依赖保留，没有为清理而改写发送逻辑。
+归档保留原相对路径；同目录 `cleanup-manifest.json` 和 `cleanup-followup.md` 记录移出清单，可恢复。个人文案、Git 历史和 WeGame 实际运行文件均未改动。当前版本的必要辅助依赖保留，没有为清理而改写发送逻辑。测试代码已归档；若以后修改原生实现，先恢复测试代码和夹具再重新验证。
+
+清理前当前成功组件、最新已应用文案、草稿和状态的 12 文件快照位于归档的 `files/backups/current-success-20261005/`，不是应用时读取的文件。
