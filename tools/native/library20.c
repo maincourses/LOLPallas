@@ -16,6 +16,15 @@ API int __stdcall HeapFree(HANDLE, DWORD, void *);
 extern void *copy_string(void *, const char *);
 extern void original_send(const char *);
 
+/* The capacity control changes ONLY this bound. Default builds must reproduce
+ * the user-verified 8 KiB DLL byte-for-byte; no new format, path or loader. */
+#ifndef LPS_LIBRARY_CAPACITY
+#define LPS_LIBRARY_CAPACITY 8192
+#endif
+#if LPS_LIBRARY_CAPACITY != 8192 && LPS_LIBRARY_CAPACITY != 65536
+#error Unsupported local-library capacity control
+#endif
+
 static const WCHAR library_path[] = L"C:\\Users\\zly\\AppData\\Local\\PallasCustomShout\\library20-v1.json";
 static const char prefix[] = "{\"_lps_local_v1\":\"";
 static const char empty_scheme[] =
@@ -48,7 +57,7 @@ void *ReadLocalScheme(void *destination, const char *source) {
     /* Check sequentially: a truncated token never reads past its first NUL. */
     if (!hex8(token, &length) || token[8] != ':' ||
         !hex8(token + 9, &expected) || token[17] != '"' || token[18] != ',' ||
-        length < 2 || length > 8192) return copy_string(destination, empty_scheme);
+        length < 2 || length > LPS_LIBRARY_CAPACITY) return copy_string(destination, empty_scheme);
     HANDLE file = CreateFileW(library_path, 0x80000000u, 1, 0, 3, 0x00200080u, 0);
     if (file == (HANDLE)(SIZE_T)-1 || !file) return copy_string(destination, empty_scheme);
     HANDLE heap = GetProcessHeap();

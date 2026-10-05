@@ -20,6 +20,8 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("--build", type=Path, required=True)
 parser.add_argument("--child", action="store_true")
 parser.add_argument("--real-io-child", action="store_true")
+parser.add_argument("--control-baseline", action="store_true",
+                    help="Child only: test the reproduced 8 KiB object in a capacity-control build.")
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("library", root / "tools/native/PallasLibrary.py")
@@ -29,6 +31,17 @@ original = (root / "engine/assets/TenPallas.original.dll").read_bytes()
 obj = (args.build / "library20.obj").read_bytes()
 candidate = (args.build / "TenPallas.library.experimental.dll").read_bytes()
 manifest = json.loads((args.build / "manifest.json").read_text())
+capacity = manifest["metrics"]["library_limit"]
+if capacity not in (8192, 65536):
+    raise ValueError("Unknown reader test capacity.")
+is_capacity_control = manifest["experiment"] == "legacy-capacity-only-64k-control-v1"
+if capacity == 65536 and not is_capacity_control:
+    raise ValueError("64 KiB tests require the capacity-only legacy profile.")
+if args.control_baseline:
+    if not is_capacity_control or not (args.child or args.real_io_child):
+        raise ValueError("Baseline override is limited to capacity-control child fixtures.")
+    obj = (args.build / "baseline8k.obj").read_bytes()
+    capacity = 8192
 scheme = m.twenty.read_scheme(root / "experiments/local-library/scheme20.example.json")
 
 class Offline(unittest.TestCase):
@@ -160,13 +173,15 @@ def native(real_io=False):
         if real_io:
             # Only this GENERATED build fixture is opened, NEVER the live path
             # embedded in C. Native flags/ReadFile/heap/close APIs are real.
-            handle = k.CreateFileW(str((args.build / "library20-v1.json").resolve()),
+            fixture = (args.build / state.get("io_fixture", "library20-v1.json")).resolve()
+            assert args.build.resolve() in fixture.parents
+            handle = k.CreateFileW(str(fixture),
                                     access, share, security, disposition, flags, template)
             state["handle"] = handle
             return handle
         return 0x1234 if not state.get("missing") else 0xFFFFFFFFFFFFFFFF
     def heap_alloc(heap, flags, size):
-        assert heap == (k.GetProcessHeap() if real_io else 1) and flags == 0 and 3 <= size <= 8193
+        assert heap == (k.GetProcessHeap() if real_io else 1) and flags == 0 and 3 <= size <= capacity + 1
         state["alloc"] += 1
         if state.get("no_memory"): return None
         if real_io:
@@ -262,21 +277,45 @@ def native(real_io=False):
         for i in range(20):
             buf = ctypes.create_string_buffer(value[str(i)].encode()); send(ctypes.addressof(buf))
         assert state["sent"] == []
+    def capacity_fixtures():
+        if not is_capacity_control:
+            return
+        for fixture in manifest["fixtures"]:
+            name = "fixtures/" + fixture["filename"]
+            payload = (args.build / name).read_bytes()
+            assert len(payload) == fixture["bytes"]
+            assert m.twenty.sha256(payload) == fixture["sha256"]
+            # Exactly the same twenty texts and original key; padding is NOT
+            # extra messages and does not expand the per-entry length guard.
+            assert json.loads(payload) == json.loads(real)
+            packet = json.loads((args.build / "fixtures" / f'response-{len(payload)}.json').read_bytes())
+            source = base64.b64decode(packet["shout_message"], validate=True)
+            assert len(source) <= 2046
+            copied = run(payload, source=source, io_fixture=name)
+            if len(payload) <= capacity:
+                assert copied == payload and json.loads(copied) == json.loads(real)
+                assert state["read"] == state["alloc"] == state["close"] == state["free"] == 1
+            else:
+                empty(copied)
+                assert state["open"] == state["read"] == state["alloc"] == 0
     try:
         real = (args.build / "library20-v1.json").read_bytes()
         assert len(real) == 2294 and run(real) == real
         assert json.loads(state["copied"])["19"].endswith("LIB-END-20")
+        capacity_fixtures()
         if real_io:
             for _ in range(2):
                 assert run(real) == real
                 assert state["read"] == state["alloc"] == state["close"] == state["free"] == 1
             return dict(passed=True, cases=cases, actual_win32_file_io=True,
-                file_scope="Generated build/library20-v1.json fixture ONLY", own_process_only=True,
+                file_scope="Generated build JSON fixtures ONLY", capacity_boundary=capacity,
+                capacity_control_baseline=args.control_baseline, own_process_only=True,
                 real_dll_loaded=False, live_runtime_files_accessed=False, real_game_send_verified=False)
-        for n in (2, 2046, 2047, 4096, 8192):
+        sizes = sorted({2, 2046, 2047, 4096, 8192, capacity - 1, capacity}) if is_capacity_control else (2, 2046, 2047, 4096, 8192)
+        for n in sizes:
             raw = b"{}" if n == 2 else b'{"x":"' + b"a" * (n - 8) + b'"}'
             assert len(raw) == n and run(raw) == raw
-        empty(run(b"a" * 8193))
+        empty(run(b"a" * (capacity + 1)))
         empty(run(b"x"))
         short = f'{{"_lps_local_v1":"{len(real):08X}:{m.fnv1a(real):08X}",'.encode()
         for flags in (dict(missing=True), dict(no_memory=True), dict(no_heap=True), dict(read_error=True)):
@@ -289,10 +328,20 @@ def native(real_io=False):
         for length in range(19):
             empty(run(real, source=(short[:len(prefix) + length])))
         empty(run(real, source=prefix + b"00000000:00000000\","))
-        empty(run(real, source=prefix + b"00002001:00000000\","))
+        empty(run(real, source=prefix + f'{capacity + 1:08X}:00000000\",'.encode()))
         empty(run(real, source=prefix + b"000008F6:ebcba822\","))
         for regular in (b"{}", b'{"0":"normal"}', b"x", b""):
             assert run(b"unused", source=regular) == regular and state["open"] == 0
+        if is_capacity_control:
+            # The raised upper bound must not weaken exact length, checksum,
+            # NUL, allocation and cleanup checks at the new boundary.
+            boundary = (args.build / "fixtures" / f"library-{capacity}.json").read_bytes()
+            token = f'{{"_lps_local_v1":"{len(boundary):08X}:{m.fnv1a(boundary):08X}",'.encode()
+            for payload in (boundary[:-1], boundary + b"x", bytes([boundary[0] ^ 1]) + boundary[1:]):
+                empty(run(payload, source=token))
+            empty(run(boundary[:-1] + b"\0"))
+            for flags in (dict(no_memory=True), dict(no_heap=True), dict(read_error=True)):
+                empty(run(boundary, **flags))
         run(real)
         send(None); zero = ctypes.create_string_buffer(b""); send(ctypes.addressof(zero))
         assert state["sent"] == []
@@ -303,7 +352,8 @@ def native(real_io=False):
             cases += 1
         assert not callback_errors, callback_errors
         return dict(passed=True, cases=cases, mocked_win32=True, own_process_only=True,
-            native_unwind_registered=True, capacity_boundary=8192, real_dll_loaded=False,
+            native_unwind_registered=True, capacity_boundary=capacity,
+            capacity_control_baseline=args.control_baseline, real_dll_loaded=False,
             real_files_read=False, real_game_send_verified=False)
     finally:
         if registered: assert ntdll.RtlDeleteFunctionTable(table)
@@ -323,6 +373,14 @@ if file_child.returncode:
 report = dict(unit_tests=result.testsRun, unit_tests_passed=True, native=json.loads(child.stdout),
     native_file_io=json.loads(file_child.stdout),
     candidate_dll_sha256=m.twenty.sha256(candidate), installed=False, runtime_verified=False, game_send_verified=False)
+if is_capacity_control:
+    report["baseline8k"] = {}
+    for kind in ("--child", "--real-io-child"):
+        baseline_child = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--build", str(args.build),
+                                        kind, "--control-baseline"], capture_output=True, text=True, timeout=30)
+        if baseline_child.returncode:
+            raise SystemExit(f"8 KiB A/B fixture failed: {baseline_child.returncode}\n{baseline_child.stdout}\n{baseline_child.stderr}")
+        report["baseline8k"][kind[2:]] = json.loads(baseline_child.stdout)
 with (args.build / "validation.library.json").open("x", encoding="utf-8") as stream:
     json.dump(report, stream, indent=2)
 print(json.dumps(report))
