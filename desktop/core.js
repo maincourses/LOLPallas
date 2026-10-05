@@ -12,6 +12,17 @@ const WORKING_DLL = "5407dfa6a92640b216f5fba143a5baf63ec68e46a108fc664356df3a037
 const PORTABLE_DLL = "58bfd7feaf836fb91f41d41ddcffbd15fb938bab42c2ea2db8072ef00dee3acd";
 const STOCK_LOADER = "e17f8ce7ca6936a5984af16bb2751f305b3f72f556d0c7d2ad31c2c9ee70d119";
 const WORKING_LOADER = "803870e3fda683443471e835699b065293724dc7e0f3289d0093fc84c8e30935";
+// Only certificate bytes may vary automatically. Matching a few patch-site
+// bytes is not enough to establish that a new WeGame code build is compatible.
+const LOADER_PROFILES = [
+  {name:"stock",hash:STOCK_LOADER,code:"4b85c43ddf101ab165cdcb5e5d68426f8b3378d53fd965eb8b0524d720955eb1"},
+  {name:"working",hash:WORKING_LOADER,code:"d5926bce1ff51eba32790607df029a5ae1aa0d7fa79c3642bbf062dfdf17b883"}
+];
+const DLL_PROFILES = [
+  {name:"stock",hash:STOCK_DLL,code:"5709c18d88b00a09c8f29b13bc6c0de48de21e916b7ea09e848063002afa26c2"},
+  {name:"working",hash:WORKING_DLL,code:"e3079679d555a53b38d3579de3871637258f8a80b06f0e23c03acdc11fa31c11"}
+];
+const PORTABLE_DLL_CODE = "c013a05d3362423752cb6e37909886c6eb86f07ea5f87d324aad5b2df61ffbbb";
 const ORIGINAL_URL = "https://www.wegame.com.cn/api/v1/wegame.pallas.game.LolAide/GetShoutMessage";
 const URL_OFFSET = 5498824;
 const EXECUTABLE_EDITS = [
@@ -22,6 +33,38 @@ const encoder = new TextEncoder();
 
 function sha(data) { return crypto.createHash("sha256").update(data).digest("hex"); }
 function assert(condition, reason) { if (!condition) throw new Error(reason); }
+function certificateRange(bytes) {
+  assert(Buffer.isBuffer(bytes) && bytes.length >= 512 && bytes.toString("ascii",0,2)==="MZ", "无效 PE 文件");
+  const pe=bytes.readUInt32LE(0x3c);
+  assert(pe>=64 && pe+24<=bytes.length && bytes.toString("binary",pe,pe+4)==="PE\0\0", "无效 PE 头");
+  const optional=pe+24, optionalSize=bytes.readUInt16LE(pe+20);
+  const magic=bytes.readUInt16LE(optional);
+  assert(magic===0x10b || magic===0x20b, "不支持的 PE 格式");
+  const directory=optional+(magic===0x20b?112:96)+8*4;
+  assert(directory+8<=optional+optionalSize && directory+8<=bytes.length, "PE 证书目录缺失");
+  const offset=bytes.readUInt32LE(directory), size=bytes.readUInt32LE(directory+4);
+  assert(offset>=512 && size>=8 && offset%8===0 && offset+size===bytes.length, "PE 证书布局与已验证版本不同");
+  return {offset,size};
+}
+function codeFingerprint(bytes) {
+  const {offset,size}=certificateRange(bytes);
+  const copy=Buffer.from(bytes);
+  copy.fill(0,offset,offset+size);
+  return {hash:sha(copy),offset,size};
+}
+function classifySource(bytes,profiles) {
+  const full=sha(bytes);
+  let profile=profiles.find(item=>item.hash===full);
+  if(profile)return {...profile,certificateOnly:false};
+  let fingerprint;
+  try {fingerprint=codeFingerprint(bytes);} catch {return null;}
+  profile=profiles.find(item=>item.code===fingerprint.hash);
+  return profile?{...profile,certificateOnly:true}:null;
+}
+function isPortableDll(bytes) {
+  if(sha(bytes)===PORTABLE_DLL)return true;
+  try{return codeFingerprint(bytes).hash===PORTABLE_DLL_CODE;}catch{return false;}
+}
 function samePath(a,b){return typeof a==="string"&&typeof b==="string"&&
   path.resolve(a).toLowerCase()===path.resolve(b).toLowerCase();}
 function validateText(text, label) {
@@ -59,13 +102,18 @@ function compile(scheme, skipValidation = false) {
   full.title = scheme.title; full.key = 1;
   const library = encoder.encode(JSON.stringify(full));
   assert(library.length <= 65536, "整套文案超过 65,536 字节");
-  const bootstrap = {_lps_local_v1: `${library.length.toString(16).toUpperCase().padStart(8,"0")}:${fnv(library).toString(16).toUpperCase().padStart(8,"0")}`};
-  for (let i = 0; i < 20; i++) bootstrap[String(i)] = i < 10 ? preview(scheme.messages[i]) : "";
-  bootstrap.title = preview(scheme.title); bootstrap.key = 1;
-  let short = encoder.encode(JSON.stringify(bootstrap));
+  const token = `${library.length.toString(16).toUpperCase().padStart(8,"0")}:${fnv(library).toString(16).toUpperCase().padStart(8,"0")}`;
+  const previewFields = {};
+  for (let i = 0; i < 20; i++) previewFields[String(i)] = i < 10 ? preview(scheme.messages[i]) : "";
+  previewFields.title = preview(scheme.title); previewFields.key = 1;
+  // Integer-like property names always serialize before ordinary properties in
+  // JavaScript. The native reader requires this marker at byte zero of the JSON;
+  // constructing one JSON field explicitly prevents numeric keys moving first.
+  const encodeBootstrap = () => encoder.encode(`{"_lps_local_v1":${JSON.stringify(token)},${JSON.stringify(previewFields).slice(1)}`);
+  let short = encodeBootstrap();
   if (short.length > 2046) {
-    for (let i = 0; i < 10; i++) bootstrap[String(i)] = "";
-    short = encoder.encode(JSON.stringify(bootstrap));
+    for (let i = 0; i < 10; i++) previewFields[String(i)] = "";
+    short = encodeBootstrap();
   }
   assert(short.length <= 2046, "原生预览数据超出 2046 字节");
   const response = encoder.encode(JSON.stringify({result:{error_code:0}, shout_message:Buffer.from(short).toString("base64")}));
@@ -90,8 +138,8 @@ function fromLegacy(value) {
   while (messages.length > 20 && messages[messages.length - 1] === "") messages.pop();
   return validateScheme({title:value.title,key:1,messages});
 }
-function expandDelta(source, plan) {
-  assert(plan.format === 1 && sha(source) === plan.sourceSha256 && source.length === plan.sourceSize, "组件版本与补丁来源不匹配");
+function applyDeltaBytes(source,plan) {
+  assert(plan.format === 1 && source.length === plan.sourceSize, "组件布局与补丁来源不匹配");
   const result = Buffer.alloc(plan.targetSize);
   source.copy(result, 0, 0, Math.min(source.length, result.length));
   let end = 0;
@@ -101,18 +149,35 @@ function expandDelta(source, plan) {
       "补丁数据损坏");
     bytes.copy(result, offset); end = offset + bytes.length;
   }
-  assert(sha(result) === plan.targetSha256, "补丁生成后哈希不一致");
+  return result;
+}
+function expandDelta(source,plan) {
+  assert(sha(source)===plan.sourceSha256,"组件版本与补丁来源不匹配");
+  const result=applyDeltaBytes(source,plan);
+  assert(sha(result)===plan.targetSha256,"补丁生成后哈希不一致");
+  return result;
+}
+function expandCompatibleDelta(source,plan) {
+  const profile=classifySource(source,DLL_PROFILES);
+  assert(profile && profile.hash===plan.sourceSha256,"DLL 代码版本与补丁来源不匹配");
+  if(!profile.certificateOnly)return expandDelta(source,plan);
+  const sourceCertificate=certificateRange(source);
+  const result=applyDeltaBytes(source,plan);
+  const targetCertificate=certificateRange(result);
+  assert(sourceCertificate.size===targetCertificate.size,"DLL 证书长度不同，需单独适配");
+  source.copy(result,targetCertificate.offset,sourceCertificate.offset,sourceCertificate.offset+sourceCertificate.size);
+  assert(codeFingerprint(result).hash===PORTABLE_DLL_CODE,"DLL 补丁后代码校验失败");
   return result;
 }
 function patchLoader(source, responsePath) {
-  const sourceHash = sha(source);
-  assert([STOCK_LOADER, WORKING_LOADER].includes(sourceHash), "不支持此版 pallas.exe；未改动文件");
+  const profile=classifySource(source,LOADER_PROFILES);
+  assert(profile,"不支持此版 pallas.exe 的代码布局；未改动文件");
   const resolved=path.resolve(responsePath);
   assert(/^[A-Za-z]:\\/.test(resolved),"只支持本地磁盘中的文案路径");
   const url = pathToFileURL(resolved).href;
   assert(Buffer.byteLength(url,"ascii") <= 75, "当前用户路径过长，无法放入此版 Pallas 的 75 字节网址槽位");
   const result = Buffer.from(source);
-  if (sourceHash === STOCK_LOADER) {
+  if (profile.name === "stock") {
     for (const [offset, before, after] of EXECUTABLE_EDITS) {
       const original = Buffer.from(before,"hex"), replacement = Buffer.from(after,"hex");
       assert(result.subarray(offset,offset+original.length).equals(original), "启动器指令不匹配");
@@ -193,17 +258,23 @@ function findWeGame(saved = "") {
 function inspect(root, paths = dataPaths()) {
   const p = pathsForWeGame(root);
   assert(fs.existsSync(p.loader) && fs.existsSync(p.dll), "所选目录不是 WeGame 安装目录（应包含 apps\\Pallas）");
-  const loaderHash=sha(fs.readFileSync(p.loader)), dllHash=sha(fs.readFileSync(p.dll));
+  const loaderBytes=fs.readFileSync(p.loader),dllBytes=fs.readFileSync(p.dll);
+  const loaderHash=sha(loaderBytes), dllHash=sha(dllBytes);
+  const loaderProfile=classifySource(loaderBytes,LOADER_PROFILES);
+  const dllProfile=classifySource(dllBytes,DLL_PROFILES);
   const state=fs.existsSync(paths.state) ? jsonFile(paths.state) : null;
   const own=state && samePath(state.root,p.root) && state.loaderSha256===loaderHash && state.dllSha256===dllHash &&
     typeof state.backup==="string" && samePath(path.dirname(state.backup),paths.backups) &&
     fs.existsSync(path.join(state.backup,"manifest.json"));
   let status="unsupported";
-  if (own && dllHash===PORTABLE_DLL) status="installed";
-  else if ([STOCK_LOADER,WORKING_LOADER].includes(loaderHash) && [STOCK_DLL,WORKING_DLL].includes(dllHash)) status="ready";
+  if (own && isPortableDll(dllBytes)) status="installed";
+  else if (loaderProfile && dllProfile) status="ready";
   return {status,root:p.root,loaderHash,dllHash,backup:own?state.backup:null,
-    message:status==="installed"?"便携组件已安装":status==="ready"?"版本匹配，可备份并应用":
-      "当前 WeGame 组件版本不受支持；为防损坏已禁止应用"};
+    loaderProfile:loaderProfile?.name||null,dllProfile:dllProfile?.name||null,
+    certificateOnly:!!(loaderProfile?.certificateOnly||dllProfile?.certificateOnly),
+    message:status==="installed"?"便携组件已安装":status==="ready"?
+      (loaderProfile.certificateOnly||dllProfile.certificateOnly?"代码匹配，仅签名数据不同；可备份并应用":"版本匹配，可备份并应用"):
+      "代码或 PE 布局与已验证版本不同；未写入。请提供新版组件进行单独适配"};
 }
 function assertStopped() {
   const output = execFileSync("tasklist",["/FO","CSV","/NH"],{encoding:"utf8",windowsHide:true});
@@ -251,8 +322,8 @@ function apply(root, scheme, paths = dataPaths(), options={}) {
     assertNoLinks(location);
   const oldLoader=fs.readFileSync(p.loader),oldDll=fs.readFileSync(p.dll);
   const newLoader=before.status==="installed"?oldLoader:patchLoader(oldLoader,paths.response);
-  const newDll=before.status==="installed"?oldDll:expandDelta(oldDll,readDelta(before.dllHash===STOCK_DLL?"stock":"working"));
-  assert(sha(newDll)===PORTABLE_DLL,"DLL 补丁验证失败");
+  const newDll=before.status==="installed"?oldDll:expandCompatibleDelta(oldDll,readDelta(before.dllProfile));
+  assert(isPortableDll(newDll),"DLL 补丁验证失败");
   const changes=[["loader",p.loader],["dll",p.dll],["library",paths.library],["response",paths.response],
     ["state",paths.state]];
   const backup=backupEntries(changes,paths);

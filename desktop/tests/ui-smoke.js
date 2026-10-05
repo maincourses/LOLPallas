@@ -13,7 +13,7 @@ async function main(){
   const port=19433;
   const electron=require("electron");
   const target=process.argv.includes("--asar")?path.join(root,"dist","win-unpacked","resources","app.asar"):".";
-  const child=spawn(electron,[`--remote-debugging-port=${port}`,target],{
+  const child=spawn(electron,[`--remote-debugging-port=${port}`,`--user-data-dir=${path.join(scratch,"electron-profile")}`,target],{
     cwd:root,env:{...process.env,LPS_TEST_DATA_ROOT:scratch},windowsHide:true,stdio:"ignore"});
   let browser;
   try{

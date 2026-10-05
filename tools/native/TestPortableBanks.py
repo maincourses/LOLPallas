@@ -7,6 +7,8 @@ from pathlib import Path
 import sys
 import tempfile
 import struct
+import json
+import base64
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).parent))
@@ -99,6 +101,20 @@ try:
     read(ctypes.addressof(dest),ctypes.addressof(source))
     assert b"LOCAL LIBRARY LOAD FAILED" in dest.value
     print("own-process native LocalAppData reader, length/checksum fail-close: OK")
+    # Also exercise the *real* Shell32 import and the currently installed
+    # profile path. The stub above proves parsing but cannot catch a wrong
+    # CSIDL, import thunk or app-data path on this machine.
+    live = Path(os.environ["LOCALAPPDATA"]) / "LPS" / "library.json"
+    if live.is_file():
+        actual = live.read_bytes()
+        response=json.loads((live.parent/"r.json").read_bytes())
+        real_source=ctypes.create_string_buffer(base64.b64decode(response["shout_message"]))
+        shell32=ctypes.WinDLL("shell32")
+        folder_real=shell32.SHGetFolderPathW
+        ctypes.c_void_p.from_address(base+lib.PORTABLE_IMPORT_RVAS["__imp_SHGetFolderPathW"]).value=ctypes.cast(folder_real,ctypes.c_void_p).value
+        read(ctypes.addressof(dest),ctypes.addressof(real_source))
+        assert dest.value == actual, (len(dest.value),len(actual),dest.value[:100])
+        print("own-process native real LocalAppData reader: OK")
 finally:
     if "scratch" in locals():
         p=Path(scratch)
