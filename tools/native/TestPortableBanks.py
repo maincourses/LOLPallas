@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import ctypes
+import os
 from pathlib import Path
 import sys
+import tempfile
+import struct
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).parent))
@@ -16,7 +19,7 @@ k.VirtualAlloc.restype = ctypes.c_void_p
 k.VirtualProtect.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32, ctypes.c_void_p]
 k.VirtualProtect.restype = ctypes.c_int
 k.VirtualFree.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_uint32]
-base = k.VirtualAlloc(None, 0x20000, 0x3000, 0x04)
+base = k.VirtualAlloc(None, 0x110000, 0x3000, 0x04)
 if not base:
     raise ctypes.WinError(ctypes.get_last_error())
 try:
@@ -24,6 +27,30 @@ try:
     imports.update(copy_string=base+0x18000, original_send=base+0x18020)
     code, exports, _, _ = lib.Coff(obj).link(base, 0, imports)
     ctypes.memmove(base, code, len(code))
+    # Real Kernel32 imports with an owned Shell32 path stub. This tests only our
+    # C reader and a temp library, not Tencent code or a live game file.
+    kernel = ctypes.WinDLL("kernel32")
+    for name,rva in lib.IMPORT_RVAS.items():
+        fn=getattr(kernel,name.removeprefix("__imp_"))
+        ctypes.c_void_p.from_address(base+rva).value=ctypes.cast(fn,ctypes.c_void_p).value
+    scratch=tempfile.mkdtemp(prefix="LPS-native-")
+    callbacks=[]
+    WIN=ctypes.WINFUNCTYPE
+    def folder(_hwnd,_csidl,_token,_flags,target):
+        raw=(scratch+"\0").encode("utf-16-le")
+        ctypes.memmove(target,raw,len(raw))
+        return 0
+    folder_fn=WIN(ctypes.c_int,ctypes.c_void_p,ctypes.c_int,ctypes.c_void_p,ctypes.c_uint32,ctypes.c_void_p)(folder)
+    callbacks.append(folder_fn)
+    ctypes.c_void_p.from_address(base+lib.PORTABLE_IMPORT_RVAS["__imp_SHGetFolderPathW"]).value=ctypes.cast(folder_fn,ctypes.c_void_p).value
+    def copy(dest,src):
+        raw=ctypes.string_at(src)+b"\0"
+        ctypes.memmove(dest,raw,len(raw))
+        return dest
+    copy_fn=WIN(ctypes.c_void_p,ctypes.c_void_p,ctypes.c_void_p)(copy)
+    callbacks.append(copy_fn)
+    ctypes.memmove(base+0x18000,b"\x48\xB8"+struct.pack("<Q",ctypes.cast(copy_fn,ctypes.c_void_p).value)+b"\xFF\xE0",12)
+    ctypes.memmove(base+0x18020,b"\xC3",1)
     old = ctypes.c_uint32()
     if not k.VirtualProtect(base, 0x20000, 0x20, ctypes.byref(old)):
         raise ctypes.WinError(ctypes.get_last_error())
@@ -58,5 +85,24 @@ try:
     for n in (20,21,29,30,31,79,80):
         run(n)
     print("own-process native bank cycling: 20, 21, 29, 30, 31, 79, 80 OK")
+    library=Path(scratch)/"LPS"/"library.json"
+    library.parent.mkdir()
+    raw=b'{"0":"hello","title":"test","key":1}'
+    library.write_bytes(raw)
+    token=f'{len(raw):08X}:{lib.fnv1a(raw):08X}'
+    source=ctypes.create_string_buffer(('{'+'"_lps_local_v1":"'+token+'","0":""}').encode("ascii"))
+    dest=ctypes.create_string_buffer(65537)
+    read=WIN(ctypes.c_void_p,ctypes.c_void_p,ctypes.c_void_p)(exports["ReadLocalScheme"])
+    assert read(ctypes.addressof(dest),ctypes.addressof(source))==ctypes.addressof(dest)
+    assert dest.value==raw, dest.value[:100]
+    library.write_bytes(raw+b"x")
+    read(ctypes.addressof(dest),ctypes.addressof(source))
+    assert b"LOCAL LIBRARY LOAD FAILED" in dest.value
+    print("own-process native LocalAppData reader, length/checksum fail-close: OK")
 finally:
+    if "scratch" in locals():
+        p=Path(scratch)
+        if p.parent==Path(tempfile.gettempdir()) and p.name.startswith("LPS-native-"):
+            import shutil
+            shutil.rmtree(p)
     k.VirtualFree(base,0,0x8000)
